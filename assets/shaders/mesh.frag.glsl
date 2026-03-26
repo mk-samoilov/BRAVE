@@ -39,7 +39,7 @@ float calc_shadow(vec4 light_space_pos) {
     if (frame.shadows_enabled == 0) return 0.0;
 
     vec3 proj = light_space_pos.xyz / light_space_pos.w;
-    proj = proj * 0.5 + 0.5;
+    proj.xy = proj.xy * 0.5 + 0.5;
 
     if (proj.z > 1.0) return 0.0;
 

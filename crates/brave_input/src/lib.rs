@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use winit::event::{ElementState, MouseButton as WinitMouseButton, WindowEvent};
+use winit::event::{ElementState, MouseButton as WinitMouseButton, MouseScrollDelta, WindowEvent};
 use winit::keyboard::{KeyCode, PhysicalKey};
 
 pub use winit::keyboard::KeyCode as Key;
@@ -24,6 +24,9 @@ pub struct Input {
     /// Дельта за кадр (накапливается из DeviceEvent)
     mouse_delta: (f32, f32),
     mouse_delta_accum: (f32, f32),
+
+    mouse_scroll: f32,
+    scroll_accum: f32,
 }
 
 impl Input {
@@ -38,6 +41,8 @@ impl Input {
             mouse_position: (0.0, 0.0),
             mouse_delta: (0.0, 0.0),
             mouse_delta_accum: (0.0, 0.0),
+            mouse_scroll: 0.0,
+            scroll_accum: 0.0,
         }
     }
 
@@ -78,6 +83,10 @@ impl Input {
         self.mouse_released.contains(&button)
     }
 
+    pub fn mouse_scroll(&self) -> f32 {
+        self.mouse_scroll
+    }
+
     // --- Внутренние методы для обновления из event loop ---
 
     /// Вызывается в начале каждого кадра: сбрасывает pressed/released/delta.
@@ -88,6 +97,8 @@ impl Input {
         self.mouse_released.clear();
         self.mouse_delta = self.mouse_delta_accum;
         self.mouse_delta_accum = (0.0, 0.0);
+        self.mouse_scroll = self.scroll_accum;
+        self.scroll_accum = 0.0;
     }
 
     /// Обработать WindowEvent от winit.
@@ -120,6 +131,13 @@ impl Input {
             },
             WindowEvent::CursorMoved { position, .. } => {
                 self.mouse_position = (position.x as f32, position.y as f32);
+            }
+            WindowEvent::MouseWheel { delta, .. } => {
+                let y = match delta {
+                    MouseScrollDelta::LineDelta(_, y) => *y,
+                    MouseScrollDelta::PixelDelta(pos) => pos.y as f32 * 0.1,
+                };
+                self.scroll_accum += y;
             }
             _ => {}
         }

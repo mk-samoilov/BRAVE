@@ -302,9 +302,9 @@ impl Renderer {
             if entity.has::<DirectionalLight>() && entity.has::<Transform>() {
                 let light = entity.get::<DirectionalLight>();
                 let tr    = entity.get::<Transform>();
-                let dir   = (tr.rotation * (-Vec3::Z)).normalize();
+                let dir   = tr.position.normalize();
                 let light_pos = tr.position;
-                let light_view = Mat4::look_at_rh(light_pos, light_pos + dir, Vec3::Y);
+                let light_view = Mat4::look_at_rh(light_pos, Vec3::ZERO, Vec3::Y);
                 let light_proj = Mat4::orthographic_rh(-20.0, 20.0, -20.0, 20.0, 0.1, 100.0);
                 let light_space = light_proj * light_view;
 
@@ -533,8 +533,7 @@ impl Renderer {
         for entity in world.entities() {
             if entity.has::<DirectionalLight>() && entity.has::<Transform>() {
                 let tr  = entity.get::<Transform>();
-                let dir = (tr.rotation * (-Vec3::Z)).normalize();
-                let light_view = Mat4::look_at_rh(tr.position, tr.position + dir, Vec3::Y);
+                let light_view = Mat4::look_at_rh(tr.position, Vec3::ZERO, Vec3::Y);
                 let light_proj = Mat4::orthographic_rh(-20.0, 20.0, -20.0, 20.0, 0.1, 100.0);
                 return light_proj * light_view;
             }
