@@ -10,3 +10,7 @@ gltf         = { version = "1", features = ["utils"] }
 image        = { version = "0.25", default-features = false, features = ["png", "jpeg", "hdr"] }
 ash          = "0.38"
 log          = "0.4"
+
+[build-dependencies]
+gltf  = { version = "1", features = ["utils"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "hdr"] }

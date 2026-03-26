@@ -1,3 +1,4 @@
+pub mod ast;
 pub mod gltf_loader;
 pub mod image_loader;
 pub mod manager;
