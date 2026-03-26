@@ -1,0 +1,54 @@
+#version 450
+
+layout(location = 0) in vec3 in_position;
+layout(location = 1) in vec3 in_normal;
+layout(location = 2) in vec2 in_uv;
+
+layout(set = 0, binding = 0) uniform FrameUbo {
+    mat4 view;
+    mat4 proj;
+
+    // Directional light
+    vec4 dir_light_dir;         // xyz = направление, w = intensity
+    vec4 dir_light_color;       // xyz = цвет, w = unused
+
+    // Ambient
+    vec4 ambient;               // xyz = цвет, w = intensity
+
+    // Point lights (max 8)
+    vec4 point_pos_range[8];        // xyz = pos, w = range
+    vec4 point_color_intensity[8];  // xyz = color, w = intensity
+    int  point_count;
+    int  _pad0; int _pad1; int _pad2;
+
+    // Spot lights (max 4)
+    vec4 spot_pos_range[4];         // xyz = pos, w = range
+    vec4 spot_color_intensity[4];   // xyz = color, w = intensity
+    vec4 spot_dir_angle[4];         // xyz = direction, w = cos(angle)
+    int  spot_count;
+    int  _pad3; int _pad4; int _pad5;
+
+    // Shadow
+    mat4 light_space_matrix;
+    int  shadows_enabled;
+    int  _pad6; int _pad7; int _pad8;
+} frame;
+
+layout(push_constant) uniform PushConst {
+    mat4 model;
+} push;
+
+layout(location = 0) out vec3 frag_normal;
+layout(location = 1) out vec2 frag_uv;
+layout(location = 2) out vec3 frag_world_pos;
+layout(location = 3) out vec4 frag_light_space_pos;
+
+void main() {
+    vec4 world_pos = push.model * vec4(in_position, 1.0);
+    gl_Position = frame.proj * frame.view * world_pos;
+
+    frag_normal        = mat3(push.model) * in_normal;
+    frag_uv            = in_uv;
+    frag_world_pos     = world_pos.xyz;
+    frag_light_space_pos = frame.light_space_matrix * world_pos;
+}

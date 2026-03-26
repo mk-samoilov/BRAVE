@@ -1,0 +1,12 @@
+[workspace]
+members = ["crates/*"]
+resolver = "2"
+
+[package]
+name = "brave-engine-game"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+brave_core   = { path = "crates/brave_core" }
+env_logger   = "0.11"

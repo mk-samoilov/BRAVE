@@ -1,0 +1,17 @@
+[package]
+name = "brave_render"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+brave_math   = { path = "../brave_math" }
+brave_ecs    = { path = "../brave_ecs" }
+brave_window = { path = "../brave_window" }
+ash          = "0.38"
+winit        = "0.30"
+ash-window   = "0.13"
+raw-window-handle = "0.6"
+log          = "0.4"
+
+[features]
+default = []

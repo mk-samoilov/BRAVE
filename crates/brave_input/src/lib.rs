@@ -1,0 +1,139 @@
+use std::collections::HashSet;
+use winit::event::{ElementState, MouseButton as WinitMouseButton, WindowEvent};
+use winit::keyboard::{KeyCode, PhysicalKey};
+
+pub use winit::keyboard::KeyCode as Key;
+pub use winit::event::MouseButton;
+
+/// Состояние ввода. Обновляется каждый кадр перед системами.
+pub struct Input {
+    /// Клавиши, нажатые в текущем кадре (pressed)
+    pressed: HashSet<KeyCode>,
+    /// Клавиши, удерживаемые (held)
+    held: HashSet<KeyCode>,
+    /// Клавиши, отпущенные в текущем кадре (released)
+    released: HashSet<KeyCode>,
+
+    /// Кнопки мыши
+    mouse_pressed: HashSet<WinitMouseButton>,
+    mouse_held: HashSet<WinitMouseButton>,
+    mouse_released: HashSet<WinitMouseButton>,
+
+    /// Позиция курсора в пикселях
+    mouse_position: (f32, f32),
+    /// Дельта за кадр (накапливается из DeviceEvent)
+    mouse_delta: (f32, f32),
+    mouse_delta_accum: (f32, f32),
+}
+
+impl Input {
+    pub fn new() -> Self {
+        Self {
+            pressed: HashSet::new(),
+            held: HashSet::new(),
+            released: HashSet::new(),
+            mouse_pressed: HashSet::new(),
+            mouse_held: HashSet::new(),
+            mouse_released: HashSet::new(),
+            mouse_position: (0.0, 0.0),
+            mouse_delta: (0.0, 0.0),
+            mouse_delta_accum: (0.0, 0.0),
+        }
+    }
+
+    // --- Keyboard ---
+
+    pub fn is_key_pressed(&self, key: Key) -> bool {
+        self.pressed.contains(&key)
+    }
+
+    pub fn is_key_held(&self, key: Key) -> bool {
+        self.held.contains(&key)
+    }
+
+    pub fn is_key_released(&self, key: Key) -> bool {
+        self.released.contains(&key)
+    }
+
+    // --- Mouse ---
+
+    pub fn mouse_position(&self) -> (f32, f32) {
+        self.mouse_position
+    }
+
+    /// Движение мыши за текущий кадр.
+    pub fn mouse_delta(&self) -> (f32, f32) {
+        self.mouse_delta
+    }
+
+    pub fn is_mouse_pressed(&self, button: MouseButton) -> bool {
+        self.mouse_pressed.contains(&button)
+    }
+
+    pub fn is_mouse_held(&self, button: MouseButton) -> bool {
+        self.mouse_held.contains(&button)
+    }
+
+    pub fn is_mouse_released(&self, button: MouseButton) -> bool {
+        self.mouse_released.contains(&button)
+    }
+
+    // --- Внутренние методы для обновления из event loop ---
+
+    /// Вызывается в начале каждого кадра: сбрасывает pressed/released/delta.
+    pub fn begin_frame(&mut self) {
+        self.pressed.clear();
+        self.released.clear();
+        self.mouse_pressed.clear();
+        self.mouse_released.clear();
+        self.mouse_delta = self.mouse_delta_accum;
+        self.mouse_delta_accum = (0.0, 0.0);
+    }
+
+    /// Обработать WindowEvent от winit.
+    pub fn handle_window_event(&mut self, event: &WindowEvent) {
+        match event {
+            WindowEvent::KeyboardInput { event, .. } => {
+                if let PhysicalKey::Code(code) = event.physical_key {
+                    match event.state {
+                        ElementState::Pressed if !event.repeat => {
+                            self.pressed.insert(code);
+                            self.held.insert(code);
+                        }
+                        ElementState::Released => {
+                            self.released.insert(code);
+                            self.held.remove(&code);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            WindowEvent::MouseInput { state, button, .. } => match state {
+                ElementState::Pressed => {
+                    self.mouse_pressed.insert(*button);
+                    self.mouse_held.insert(*button);
+                }
+                ElementState::Released => {
+                    self.mouse_released.insert(*button);
+                    self.mouse_held.remove(button);
+                }
+            },
+            WindowEvent::CursorMoved { position, .. } => {
+                self.mouse_position = (position.x as f32, position.y as f32);
+            }
+            _ => {}
+        }
+    }
+
+    /// Обработать сырую дельту мыши (из DeviceEvent::MouseMotion).
+    pub fn handle_mouse_motion(&mut self, delta: (f64, f64)) {
+        self.mouse_delta_accum.0 += delta.0 as f32;
+        self.mouse_delta_accum.1 += delta.1 as f32;
+    }
+}
+
+impl Default for Input {
+    fn default() -> Self {
+        Self::new()
+    }
+}

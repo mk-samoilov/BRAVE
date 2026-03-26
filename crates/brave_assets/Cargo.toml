@@ -1,0 +1,12 @@
+[package]
+name = "brave_assets"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+brave_math   = { path = "../brave_math" }
+brave_render = { path = "../brave_render" }
+gltf         = { version = "1", features = ["utils"] }
+image        = { version = "0.25", default-features = false, features = ["png", "jpeg", "hdr"] }
+ash          = "0.38"
+log          = "0.4"
