@@ -33,7 +33,7 @@ pub struct SpotLight {
     pub color:     Color,
     pub intensity: f32,
     pub range:     f32,
-    pub angle:     f32, // угол конуса в радианах
+    pub angle:     f32,
 }
 
 impl Default for SpotLight {

@@ -9,22 +9,22 @@ layout(set = 0, binding = 0) uniform FrameUbo {
     mat4 proj;
 
     // Directional light
-    vec4 dir_light_dir;         // xyz = направление, w = intensity
-    vec4 dir_light_color;       // xyz = цвет, w = unused
+    vec4 dir_light_dir;
+    vec4 dir_light_color;
 
     // Ambient
-    vec4 ambient;               // xyz = цвет, w = intensity
+    vec4 ambient;
 
     // Point lights (max 8)
-    vec4 point_pos_range[8];        // xyz = pos, w = range
-    vec4 point_color_intensity[8];  // xyz = color, w = intensity
+    vec4 point_pos_range[8];
+    vec4 point_color_intensity[8];
     int  point_count;
     int  _pad0; int _pad1; int _pad2;
 
     // Spot lights (max 4)
-    vec4 spot_pos_range[4];         // xyz = pos, w = range
-    vec4 spot_color_intensity[4];   // xyz = color, w = intensity
-    vec4 spot_dir_angle[4];         // xyz = direction, w = cos(angle)
+    vec4 spot_pos_range[4];
+    vec4 spot_color_intensity[4];
+    vec4 spot_dir_angle[4];
     int  spot_count;
     int  _pad3; int _pad4; int _pad5;
 
@@ -32,6 +32,10 @@ layout(set = 0, binding = 0) uniform FrameUbo {
     mat4 light_space_matrix;
     int  shadows_enabled;
     int  _pad6; int _pad7; int _pad8;
+
+    vec4 cam_pos;
+    int  rt_aabb_count;
+    int  _pad9; int _pad10; int _pad11;
 } frame;
 
 layout(push_constant) uniform PushConst {

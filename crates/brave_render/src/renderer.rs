@@ -10,8 +10,8 @@ use crate::context::VulkanContext;
 use crate::light::{AmbientLight, DirectionalLight, PointLight, SpotLight};
 use crate::mesh::MeshRenderer;
 use crate::pipeline::{
-    FrameUbo, Pipeline, PushConstants, ShadowPipeline, ShadowPush,
-    SHADOW_MAP_SIZE, MAX_POINT_LIGHTS, MAX_SPOT_LIGHTS,
+    AabbEntry, FrameUbo, Pipeline, PushConstants, ShadowPipeline, ShadowPush,
+    SHADOW_MAP_SIZE, MAX_POINT_LIGHTS, MAX_SPOT_LIGHTS, MAX_RT_OBJECTS,
 };
 use crate::swapchain::Swapchain;
 
@@ -19,10 +19,10 @@ const FRAMES_IN_FLIGHT: usize = 2;
 
 struct FrameData {
     image_available: vk::Semaphore,
-    render_finished: vk::Semaphore,
     in_flight:       vk::Fence,
     command_buffer:  vk::CommandBuffer,
     ubo_buffer:      Buffer,
+    ssbo_buffer:     Buffer,
     descriptor_set:  vk::DescriptorSet,
 }
 
@@ -35,17 +35,18 @@ struct ShadowMap {
 }
 
 pub struct Renderer {
-    ctx:             VulkanContext,
-    swapchain:       Swapchain,
-    pipeline:        Pipeline,
-    shadow_pipeline: ShadowPipeline,
-    shadow_map:      ShadowMap,
-    framebuffers:    Vec<vk::Framebuffer>,
-    command_pool:    vk::CommandPool,
-    frames:          Vec<FrameData>,
-    descriptor_pool: vk::DescriptorPool,
-    current_frame:   usize,
-    _skybox:         Option<()>,
+    ctx:                       VulkanContext,
+    swapchain:                 Swapchain,
+    pipeline:                  Pipeline,
+    shadow_pipeline:           ShadowPipeline,
+    shadow_map:                ShadowMap,
+    framebuffers:              Vec<vk::Framebuffer>,
+    command_pool:              vk::CommandPool,
+    frames:                    Vec<FrameData>,
+    render_finished_per_image: Vec<vk::Semaphore>,
+    descriptor_pool:           vk::DescriptorPool,
+    current_frame:             usize,
+    _skybox:                   Option<()>,
 }
 
 impl Renderer {
@@ -71,12 +72,21 @@ impl Renderer {
         let cmd_buffers = create_command_buffers(&ctx, command_pool, FRAMES_IN_FLIGHT);
         let ubo_size = std::mem::size_of::<FrameUbo>() as vk::DeviceSize;
 
+        let ssbo_size = (std::mem::size_of::<AabbEntry>() * MAX_RT_OBJECTS) as vk::DeviceSize;
+
         let frames: Vec<FrameData> = (0..FRAMES_IN_FLIGHT)
             .map(|i| {
                 let ubo_buffer = Buffer::new(
                     &ctx,
                     ubo_size,
                     vk::BufferUsageFlags::UNIFORM_BUFFER,
+                    vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+                );
+
+                let ssbo_buffer = Buffer::new(
+                    &ctx,
+                    ssbo_size,
+                    vk::BufferUsageFlags::STORAGE_BUFFER,
                     vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
                 );
 
@@ -104,19 +114,35 @@ impl Renderer {
                     .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                     .image_info(std::slice::from_ref(&image_info));
 
+                let ssbo_info = vk::DescriptorBufferInfo {
+                    buffer: ssbo_buffer.handle,
+                    offset: 0,
+                    range: ssbo_size,
+                };
+                let write_ssbo = vk::WriteDescriptorSet::default()
+                    .dst_set(descriptor_sets[i])
+                    .dst_binding(2)
+                    .dst_array_element(0)
+                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                    .buffer_info(std::slice::from_ref(&ssbo_info));
+
                 unsafe {
-                    ctx.device.update_descriptor_sets(&[write_ubo, write_sampler], &[]);
+                    ctx.device.update_descriptor_sets(&[write_ubo, write_sampler, write_ssbo], &[]);
                 }
 
                 FrameData {
                     image_available: create_semaphore(&ctx),
-                    render_finished: create_semaphore(&ctx),
                     in_flight: create_fence(&ctx, true),
                     command_buffer: cmd_buffers[i],
                     ubo_buffer,
+                    ssbo_buffer,
                     descriptor_set: descriptor_sets[i],
                 }
             })
+            .collect();
+
+        let render_finished_per_image = (0..swapchain.images.len())
+            .map(|_| create_semaphore(&ctx))
             .collect();
 
         Self {
@@ -128,6 +154,7 @@ impl Renderer {
             framebuffers,
             command_pool,
             frames,
+            render_finished_per_image,
             descriptor_pool,
             current_frame: 0,
             _skybox: None,
@@ -170,7 +197,8 @@ impl Renderer {
 
         unsafe { self.ctx.device.reset_fences(&[frame.in_flight]).unwrap() };
 
-        self.update_ubo(world, width, height);
+        let rt_count = self.update_ssbo(world, world_transforms);
+        self.update_ubo(world, width, height, rt_count);
 
         let frame = &self.frames[self.current_frame];
         unsafe {
@@ -182,12 +210,13 @@ impl Renderer {
         self.record_commands(frame.command_buffer, image_index as usize, world, world_transforms);
 
         let frame = &self.frames[self.current_frame];
+        let render_finished = self.render_finished_per_image[image_index as usize];
         let wait_stages = [vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
         let submit_info = vk::SubmitInfo::default()
             .wait_semaphores(std::slice::from_ref(&frame.image_available))
             .wait_dst_stage_mask(&wait_stages)
             .command_buffers(std::slice::from_ref(&frame.command_buffer))
-            .signal_semaphores(std::slice::from_ref(&frame.render_finished));
+            .signal_semaphores(std::slice::from_ref(&render_finished));
 
         unsafe {
             self.ctx
@@ -197,7 +226,7 @@ impl Renderer {
         };
 
         let present_info = vk::PresentInfoKHR::default()
-            .wait_semaphores(std::slice::from_ref(&frame.render_finished))
+            .wait_semaphores(std::slice::from_ref(&render_finished))
             .swapchains(std::slice::from_ref(&self.swapchain.handle))
             .image_indices(std::slice::from_ref(&image_index));
 
@@ -218,10 +247,62 @@ impl Renderer {
         self.current_frame = (self.current_frame + 1) % FRAMES_IN_FLIGHT;
     }
 
-    fn update_ubo(&mut self, world: &World, width: u32, height: u32) {
+    fn update_ssbo(&mut self, world: &World, world_transforms: &HashMap<String, Mat4>) -> i32 {
+        let mut entries: Vec<AabbEntry> = Vec::new();
+
+        for entity in world.entities() {
+            if !entity.has::<MeshRenderer>() { continue; }
+            if entries.len() >= MAX_RT_OBJECTS { break; }
+
+            let mesh = &entity.get::<MeshRenderer>().mesh;
+            let (lmin, lmax) = mesh.local_bounds;
+            let model = world_transforms
+                .get(&entity.name)
+                .copied()
+                .unwrap_or_else(|| {
+                    entity.try_get::<Transform>()
+                        .map(|t| t.matrix())
+                        .unwrap_or(Mat4::IDENTITY)
+                });
+
+            let corners = [
+                [lmin[0], lmin[1], lmin[2]],
+                [lmax[0], lmin[1], lmin[2]],
+                [lmin[0], lmax[1], lmin[2]],
+                [lmax[0], lmax[1], lmin[2]],
+                [lmin[0], lmin[1], lmax[2]],
+                [lmax[0], lmin[1], lmax[2]],
+                [lmin[0], lmax[1], lmax[2]],
+                [lmax[0], lmax[1], lmax[2]],
+            ];
+
+            let mut wmin = [f32::MAX; 3];
+            let mut wmax = [f32::MIN; 3];
+            for c in &corners {
+                let w = model.transform_point3(Vec3::from_array(*c));
+                for i in 0..3 {
+                    wmin[i] = wmin[i].min(w[i]);
+                    wmax[i] = wmax[i].max(w[i]);
+                }
+            }
+
+            entries.push(AabbEntry {
+                min_pt: [wmin[0], wmin[1], wmin[2], 0.0],
+                max_pt: [wmax[0], wmax[1], wmax[2], 0.0],
+            });
+        }
+
+        let count = entries.len() as i32;
+        if !entries.is_empty() {
+            self.frames[self.current_frame].ssbo_buffer.upload(&self.ctx, &entries);
+        }
+        count
+    }
+
+    fn update_ubo(&mut self, world: &World, width: u32, height: u32, rt_aabb_count: i32) {
         let aspect = width as f32 / height.max(1) as f32;
 
-        let (view, proj) = self.find_camera(world, aspect);
+        let (view, proj, cam_pos) = self.find_camera(world, aspect);
         let (light_dir, light_intensity, light_color, shadows_enabled, light_space_matrix) =
             self.find_directional_light(world);
         let (ambient_color, ambient_intensity) = self.find_ambient_light(world);
@@ -270,12 +351,15 @@ impl Renderer {
             light_space_matrix: light_space_matrix.to_cols_array(),
             shadows_enabled: if shadows_enabled { 1 } else { 0 },
             _pad2: [0; 3],
+            cam_pos: [cam_pos.x, cam_pos.y, cam_pos.z, 1.0],
+            rt_aabb_count,
+            _pad3: [0; 3],
         };
 
         self.frames[self.current_frame].ubo_buffer.upload(&self.ctx, std::slice::from_ref(&ubo));
     }
 
-    fn find_camera(&self, world: &World, aspect: f32) -> (Mat4, Mat4) {
+    fn find_camera(&self, world: &World, aspect: f32) -> (Mat4, Mat4, Vec3) {
         for entity in world.entities() {
             if entity.has::<Camera>() && entity.has::<Transform>() {
                 let cam = entity.get::<Camera>();
@@ -285,13 +369,14 @@ impl Renderer {
                 let view = Mat4::look_at_rh(tr.position, tr.position + forward, up);
                 let mut proj = cam.projection_matrix(aspect);
                 proj.y_axis.y *= -1.0;
-                return (view, proj);
+                return (view, proj, tr.position);
             }
         }
-        let view = Mat4::look_at_rh(Vec3::new(0.0, 5.0, 10.0), Vec3::ZERO, Vec3::Y);
+        let pos = Vec3::new(0.0, 5.0, 10.0);
+        let view = Mat4::look_at_rh(pos, Vec3::ZERO, Vec3::Y);
         let mut proj = Mat4::perspective_rh(60f32.to_radians(), aspect, 0.1, 1000.0);
         proj.y_axis.y *= -1.0;
-        (view, proj)
+        (view, proj, pos)
     }
 
     fn find_directional_light(
@@ -388,6 +473,7 @@ impl Renderer {
         let clear_values = [
             vk::ClearValue { color: vk::ClearColorValue { float32: [0.05, 0.05, 0.1, 1.0] } },
             vk::ClearValue { depth_stencil: vk::ClearDepthStencilValue { depth: 1.0, stencil: 0 } },
+            vk::ClearValue { color: vk::ClearColorValue { float32: [0.0; 4] } },
         ];
 
         let render_pass_info = vk::RenderPassBeginInfo::default()
@@ -571,18 +657,27 @@ impl Renderer {
     pub fn ctx(&self) -> &VulkanContext {
         &self.ctx
     }
+
+    pub fn wait_idle(&self) {
+        unsafe { self.ctx.device.device_wait_idle().ok(); }
+    }
 }
 
 impl Drop for Renderer {
     fn drop(&mut self) {
         unsafe {
+            let fences: Vec<vk::Fence> = self.frames.iter().map(|f| f.in_flight).collect();
+            self.ctx.device.wait_for_fences(&fences, true, u64::MAX).ok();
             self.ctx.device.device_wait_idle().ok();
 
             for frame in &self.frames {
                 self.ctx.device.destroy_semaphore(frame.image_available, None);
-                self.ctx.device.destroy_semaphore(frame.render_finished, None);
                 self.ctx.device.destroy_fence(frame.in_flight, None);
                 frame.ubo_buffer.destroy(&self.ctx);
+                frame.ssbo_buffer.destroy(&self.ctx);
+            }
+            for &sem in &self.render_finished_per_image {
+                self.ctx.device.destroy_semaphore(sem, None);
             }
 
             for &fb in &self.framebuffers {
@@ -595,12 +690,7 @@ impl Drop for Renderer {
             self.ctx.device.destroy_image(self.shadow_map.image, None);
             self.ctx.device.free_memory(self.shadow_map.memory, None);
 
-            self.ctx.device.destroy_image_view(self.swapchain.depth_image_view, None);
-            self.ctx.device.destroy_image(self.swapchain.depth_image, None);
-            self.ctx.device.free_memory(self.swapchain.depth_image_memory, None);
-            for &view in &self.swapchain.image_views {
-                self.ctx.device.destroy_image_view(view, None);
-            }
+            self.swapchain.destroy_resources(&self.ctx.device);
             self.swapchain.loader.destroy_swapchain(self.swapchain.handle, None);
 
             self.shadow_pipeline.destroy(&self.ctx.device);
@@ -686,8 +776,8 @@ fn create_framebuffers(
     swapchain
         .image_views
         .iter()
-        .map(|&color_view| {
-            let attachments = [color_view, swapchain.depth_image_view];
+        .map(|&resolve_view| {
+            let attachments = [swapchain.msaa_color_view, swapchain.depth_image_view, resolve_view];
             let create_info = vk::FramebufferCreateInfo::default()
                 .render_pass(pipeline.render_pass)
                 .attachments(&attachments)
@@ -720,14 +810,9 @@ fn create_command_buffers(
 
 fn create_descriptor_pool(ctx: &VulkanContext, count: u32) -> vk::DescriptorPool {
     let pool_sizes = [
-        vk::DescriptorPoolSize {
-            ty: vk::DescriptorType::UNIFORM_BUFFER,
-            descriptor_count: count,
-        },
-        vk::DescriptorPoolSize {
-            ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-            descriptor_count: count,
-        },
+        vk::DescriptorPoolSize { ty: vk::DescriptorType::UNIFORM_BUFFER,         descriptor_count: count },
+        vk::DescriptorPoolSize { ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER, descriptor_count: count },
+        vk::DescriptorPoolSize { ty: vk::DescriptorType::STORAGE_BUFFER,         descriptor_count: count },
     ];
     let create_info = vk::DescriptorPoolCreateInfo::default()
         .pool_sizes(&pool_sizes)

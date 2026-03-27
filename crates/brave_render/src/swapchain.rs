@@ -1,6 +1,7 @@
 use ash::{khr, vk};
 
 use crate::context::VulkanContext;
+use crate::pipeline::MSAA_SAMPLES;
 
 pub struct Swapchain {
     pub loader: khr::swapchain::Device,
@@ -13,6 +14,9 @@ pub struct Swapchain {
     pub depth_image_memory: vk::DeviceMemory,
     pub depth_image_view: vk::ImageView,
     pub depth_format: vk::Format,
+    pub msaa_color_image: vk::Image,
+    pub msaa_color_memory: vk::DeviceMemory,
+    pub msaa_color_view: vk::ImageView,
 }
 
 impl Swapchain {
@@ -24,6 +28,8 @@ impl Swapchain {
         let depth_format = Self::find_depth_format(ctx);
         let (depth_image, depth_image_memory, depth_image_view) =
             Self::create_depth_resources(ctx, extent, depth_format);
+        let (msaa_color_image, msaa_color_memory, msaa_color_view) =
+            Self::create_msaa_color_resources(ctx, extent, format);
 
         Self {
             loader,
@@ -36,6 +42,9 @@ impl Swapchain {
             depth_image_memory,
             depth_image_view,
             depth_format,
+            msaa_color_image,
+            msaa_color_memory,
+            msaa_color_view,
         }
     }
 
@@ -61,6 +70,12 @@ impl Swapchain {
         self.depth_image = depth_image;
         self.depth_image_memory = depth_image_memory;
         self.depth_image_view = depth_image_view;
+
+        let (msaa_color_image, msaa_color_memory, msaa_color_view) =
+            Self::create_msaa_color_resources(ctx, extent, self.format);
+        self.msaa_color_image = msaa_color_image;
+        self.msaa_color_memory = msaa_color_memory;
+        self.msaa_color_view = msaa_color_view;
     }
 
     fn create_swapchain(
@@ -209,6 +224,51 @@ impl Swapchain {
         panic!("Failed to find supported depth format");
     }
 
+    fn create_msaa_color_resources(
+        ctx: &VulkanContext,
+        extent: vk::Extent2D,
+        format: vk::Format,
+    ) -> (vk::Image, vk::DeviceMemory, vk::ImageView) {
+        let image_info = vk::ImageCreateInfo::default()
+            .image_type(vk::ImageType::TYPE_2D)
+            .extent(vk::Extent3D { width: extent.width, height: extent.height, depth: 1 })
+            .mip_levels(1)
+            .array_layers(1)
+            .format(format)
+            .tiling(vk::ImageTiling::OPTIMAL)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .usage(vk::ImageUsageFlags::TRANSIENT_ATTACHMENT | vk::ImageUsageFlags::COLOR_ATTACHMENT)
+            .samples(MSAA_SAMPLES)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE);
+
+        let image = unsafe { ctx.device.create_image(&image_info, None).unwrap() };
+        let mem_reqs = unsafe { ctx.device.get_image_memory_requirements(image) };
+        let mem_type = ctx.memory_type_index(mem_reqs.memory_type_bits, vk::MemoryPropertyFlags::DEVICE_LOCAL);
+        let memory = unsafe {
+            ctx.device.allocate_memory(
+                &vk::MemoryAllocateInfo::default().allocation_size(mem_reqs.size).memory_type_index(mem_type),
+                None,
+            ).unwrap()
+        };
+        unsafe { ctx.device.bind_image_memory(image, memory, 0).unwrap() };
+
+        let view = unsafe {
+            ctx.device.create_image_view(
+                &vk::ImageViewCreateInfo::default()
+                    .image(image)
+                    .view_type(vk::ImageViewType::TYPE_2D)
+                    .format(format)
+                    .subresource_range(vk::ImageSubresourceRange {
+                        aspect_mask: vk::ImageAspectFlags::COLOR,
+                        base_mip_level: 0, level_count: 1,
+                        base_array_layer: 0, layer_count: 1,
+                    }),
+                None,
+            ).unwrap()
+        };
+        (image, memory, view)
+    }
+
     fn create_depth_resources(
         ctx: &VulkanContext,
         extent: vk::Extent2D,
@@ -223,7 +283,7 @@ impl Swapchain {
             .tiling(vk::ImageTiling::OPTIMAL)
             .initial_layout(vk::ImageLayout::UNDEFINED)
             .usage(vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT)
-            .samples(vk::SampleCountFlags::TYPE_1)
+            .samples(MSAA_SAMPLES)
             .sharing_mode(vk::SharingMode::EXCLUSIVE);
 
         let image = unsafe { ctx.device.create_image(&image_info, None).unwrap() };
@@ -255,8 +315,11 @@ impl Swapchain {
         (image, memory, view)
     }
 
-    unsafe fn destroy_resources(&self, device: &ash::Device) {
+    pub unsafe fn destroy_resources(&self, device: &ash::Device) {
         unsafe {
+            device.destroy_image_view(self.msaa_color_view, None);
+            device.destroy_image(self.msaa_color_image, None);
+            device.free_memory(self.msaa_color_memory, None);
             device.destroy_image_view(self.depth_image_view, None);
             device.destroy_image(self.depth_image, None);
             device.free_memory(self.depth_image_memory, None);

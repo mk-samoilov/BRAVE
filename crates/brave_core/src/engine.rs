@@ -170,6 +170,8 @@ impl Engine {
         for system in systems {
             system(self);
         }
+
+        self.time.throttle();
     }
 
     fn run_fixed_update(&mut self) {
@@ -263,5 +265,13 @@ fn render_system(engine: &mut Engine) {
 
     if let Some(renderer) = &mut engine.render {
         renderer.render_frame(&engine.world, &world_transforms, width, height);
+    }
+}
+
+impl Drop for Engine {
+    fn drop(&mut self) {
+        if let Some(render) = &self.render {
+            render.wait_idle();
+        }
     }
 }

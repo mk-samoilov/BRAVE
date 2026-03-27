@@ -52,6 +52,7 @@ pub struct Mesh {
     pub vertex_buffer: Buffer,
     pub index_buffer: Buffer,
     pub index_count: u32,
+    pub local_bounds: ([f32; 3], [f32; 3]),
     device: Arc<ash::Device>,
 }
 
@@ -62,6 +63,15 @@ impl Mesh {
         vertices: &[Vertex],
         indices: &[u32],
     ) -> Arc<Self> {
+        let mut bmin = [f32::MAX; 3];
+        let mut bmax = [f32::MIN; 3];
+        for v in vertices {
+            for i in 0..3 {
+                bmin[i] = bmin[i].min(v.position[i]);
+                bmax[i] = bmax[i].max(v.position[i]);
+            }
+        }
+
         let vertex_buffer = upload_via_staging(
             ctx,
             command_pool,
@@ -81,6 +91,7 @@ impl Mesh {
             vertex_buffer,
             index_buffer,
             index_count: indices.len() as u32,
+            local_bounds: (bmin, bmax),
             device: Arc::new(unsafe { std::ptr::read(&ctx.device) }),
         })
     }

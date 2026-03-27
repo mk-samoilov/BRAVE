@@ -7,14 +7,12 @@ pub use winit::window::WindowId;
 pub use winit::application::ApplicationHandler;
 pub use winit::dpi::PhysicalSize;
 
-/// Конфигурация окна для WindowPlugin.
 pub struct WindowConfig {
     pub title: &'static str,
     pub width: u32,
     pub height: u32,
 }
 
-/// Обёртка над winit-окном.
 pub struct Window {
     inner: Arc<winit::window::Window>,
     should_quit: bool,
@@ -33,7 +31,6 @@ impl Window {
         Self { inner, should_quit: false }
     }
 
-    /// Внутреннее winit-окно (нужно рендереру для создания Vulkan surface).
     pub fn raw(&self) -> &Arc<winit::window::Window> {
         &self.inner
     }
@@ -46,7 +43,6 @@ impl Window {
         self.inner.inner_size().height
     }
 
-    /// Запросить завершение игры. Движок проверяет флаг после каждого кадра.
     pub fn quit(&mut self) {
         self.should_quit = true;
     }
@@ -74,7 +70,6 @@ impl Window {
     pub fn set_cursor_grabbed(&self, grabbed: bool) {
         use winit::window::CursorGrabMode;
         if grabbed {
-            // Пробуем Confined, при неудаче — Locked (зависит от платформы)
             self.inner
                 .set_cursor_grab(CursorGrabMode::Confined)
                 .or_else(|_| self.inner.set_cursor_grab(CursorGrabMode::Locked))

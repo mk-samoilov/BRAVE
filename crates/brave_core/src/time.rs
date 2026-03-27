@@ -1,4 +1,4 @@
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 pub const FIXED_DT: f32 = 1.0 / 60.0;
 
@@ -7,6 +7,7 @@ pub struct Time {
     start: Instant,
     pub(crate) delta: f32,
     pub(crate) elapsed: f64,
+    frame_budget: Duration,
 }
 
 impl Time {
@@ -17,6 +18,7 @@ impl Time {
             start: now,
             delta: 0.0,
             elapsed: 0.0,
+            frame_budget: Duration::from_secs_f64(1.0 / 165.0),
         }
     }
 
@@ -26,6 +28,17 @@ impl Time {
         self.elapsed = now.duration_since(self.start).as_secs_f64();
         self.last_frame = now;
         self.delta
+    }
+
+    pub(crate) fn throttle(&self) {
+        let elapsed = self.last_frame.elapsed();
+        if elapsed < self.frame_budget {
+            std::thread::sleep(self.frame_budget - elapsed);
+        }
+    }
+
+    pub fn set_fps_limit(&mut self, fps: f64) {
+        self.frame_budget = Duration::from_secs_f64(1.0 / fps);
     }
 
     pub fn delta(&self) -> f32 {

@@ -5,23 +5,16 @@ use winit::keyboard::{KeyCode, PhysicalKey};
 pub use winit::keyboard::KeyCode as Key;
 pub use winit::event::MouseButton;
 
-/// Состояние ввода. Обновляется каждый кадр перед системами.
 pub struct Input {
-    /// Клавиши, нажатые в текущем кадре (pressed)
     pressed: HashSet<KeyCode>,
-    /// Клавиши, удерживаемые (held)
     held: HashSet<KeyCode>,
-    /// Клавиши, отпущенные в текущем кадре (released)
     released: HashSet<KeyCode>,
 
-    /// Кнопки мыши
     mouse_pressed: HashSet<WinitMouseButton>,
     mouse_held: HashSet<WinitMouseButton>,
     mouse_released: HashSet<WinitMouseButton>,
 
-    /// Позиция курсора в пикселях
     mouse_position: (f32, f32),
-    /// Дельта за кадр (накапливается из DeviceEvent)
     mouse_delta: (f32, f32),
     mouse_delta_accum: (f32, f32),
 
@@ -46,8 +39,6 @@ impl Input {
         }
     }
 
-    // --- Keyboard ---
-
     pub fn is_key_pressed(&self, key: Key) -> bool {
         self.pressed.contains(&key)
     }
@@ -60,13 +51,10 @@ impl Input {
         self.released.contains(&key)
     }
 
-    // --- Mouse ---
-
     pub fn mouse_position(&self) -> (f32, f32) {
         self.mouse_position
     }
 
-    /// Движение мыши за текущий кадр.
     pub fn mouse_delta(&self) -> (f32, f32) {
         self.mouse_delta
     }
@@ -87,9 +75,6 @@ impl Input {
         self.mouse_scroll
     }
 
-    // --- Внутренние методы для обновления из event loop ---
-
-    /// Вызывается в начале каждого кадра: сбрасывает pressed/released/delta.
     pub fn begin_frame(&mut self) {
         self.pressed.clear();
         self.released.clear();
@@ -101,7 +86,6 @@ impl Input {
         self.scroll_accum = 0.0;
     }
 
-    /// Обработать WindowEvent от winit.
     pub fn handle_window_event(&mut self, event: &WindowEvent) {
         match event {
             WindowEvent::KeyboardInput { event, .. } => {
@@ -143,7 +127,6 @@ impl Input {
         }
     }
 
-    /// Обработать сырую дельту мыши (из DeviceEvent::MouseMotion).
     pub fn handle_mouse_motion(&mut self, delta: (f64, f64)) {
         self.mouse_delta_accum.0 += delta.0 as f32;
         self.mouse_delta_accum.1 += delta.1 as f32;

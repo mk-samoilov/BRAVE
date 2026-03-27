@@ -2,7 +2,7 @@ use brave_ecs::Component;
 use brave_math::{Mat4, Vec3};
 
 pub struct Camera {
-    pub fov:  f32, // в градусах
+    pub fov:  f32,
     pub near: f32,
     pub far:  f32,
 }
@@ -25,7 +25,6 @@ impl Default for Camera {
 
 impl Component for Camera {}
 
-/// Вычислить view-матрицу из позиции и вращения камеры.
 pub fn compute_view(position: Vec3, forward: Vec3, up: Vec3) -> Mat4 {
     Mat4::look_at_rh(position, position + forward, up)
 }
