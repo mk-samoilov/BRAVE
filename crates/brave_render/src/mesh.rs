@@ -4,7 +4,7 @@ use ash::vk;
 
 use brave_ecs::Component;
 
-use crate::buffer::{upload_via_staging, Buffer};
+use crate::buffer::{upload_via_staging, Buffer, UploadBatch};
 use crate::context::VulkanContext;
 use crate::texture::GpuTexture;
 
@@ -88,6 +88,32 @@ impl Mesh {
             vk::BufferUsageFlags::INDEX_BUFFER,
         );
 
+        Arc::new(Self {
+            vertex_buffer,
+            index_buffer,
+            index_count: indices.len() as u32,
+            local_bounds: (bmin, bmax),
+            device: Arc::new(unsafe { std::ptr::read(&ctx.device) }),
+        })
+    }
+
+    /// Upload mesh into an `UploadBatch` — no GPU wait until `batch.flush()`.
+    pub fn new_batched(
+        ctx:     &VulkanContext,
+        batch:   &mut UploadBatch,
+        vertices: &[Vertex],
+        indices:  &[u32],
+    ) -> Arc<Self> {
+        let mut bmin = [f32::MAX; 3];
+        let mut bmax = [f32::MIN; 3];
+        for v in vertices {
+            for i in 0..3 {
+                bmin[i] = bmin[i].min(v.position[i]);
+                bmax[i] = bmax[i].max(v.position[i]);
+            }
+        }
+        let vertex_buffer = batch.upload_buffer(ctx, vertices, vk::BufferUsageFlags::VERTEX_BUFFER);
+        let index_buffer  = batch.upload_buffer(ctx, indices,  vk::BufferUsageFlags::INDEX_BUFFER);
         Arc::new(Self {
             vertex_buffer,
             index_buffer,

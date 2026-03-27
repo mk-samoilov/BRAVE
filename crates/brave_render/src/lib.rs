@@ -8,6 +8,7 @@ pub mod renderer;
 pub mod swapchain;
 pub mod texture;
 
+pub use buffer::UploadBatch;
 pub use camera::Camera;
 pub use context::VulkanContext;
 pub use light::{AmbientLight, DirectionalLight, PointLight, SpotLight};

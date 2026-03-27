@@ -220,9 +220,18 @@ dependencies = [
  "ash",
  "brave_math",
  "brave_render",
+ "glam",
  "gltf",
  "image",
  "log",
+]
+
+[[package]]
+name = "brave_base_meshes"
+version = "0.1.0"
+dependencies = [
+ "ash",
+ "brave_render",
 ]
 
 [[package]]
@@ -230,6 +239,7 @@ name = "brave_core"
 version = "0.1.0"
 dependencies = [
  "brave_assets",
+ "brave_base_meshes",
  "brave_ecs",
  "brave_input",
  "brave_math",

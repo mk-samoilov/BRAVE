@@ -22,4 +22,5 @@ pub mod prelude {
     pub use brave_math::{Color, Mat4, Quat, Vec2, Vec3, Vec4};
     pub use brave_render::{AmbientLight, Camera, DirectionalLight, Mesh, MeshRenderer,
                            PointLight, SpotLight, Vertex};
+    pub use brave_base_meshes as shapes;
 }

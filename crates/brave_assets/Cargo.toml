@@ -13,4 +13,5 @@ log          = "0.4"
 
 [build-dependencies]
 gltf  = { version = "1", features = ["utils"] }
+glam  = "0.29"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "hdr"] }

@@ -2,6 +2,12 @@
 members = ["crates/*"]
 resolver = "2"
 
+# Compile all dependencies with optimizations in debug builds.
+# This is critical for codecs (JPEG/PNG), math, and Vulkan — they are 10-20x
+# faster with opt-level=3 without sacrificing debuggability of game code.
+[profile.dev.package."*"]
+opt-level = 3
+
 [package]
 name = "brave-engine-game"
 version = "0.1.0"

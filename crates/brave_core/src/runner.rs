@@ -18,10 +18,6 @@ impl ApplicationHandler for AppRunner {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         self.engine.create_window_if_pending(event_loop);
         self.engine.create_renderer_if_pending();
-
-        if !self.engine.startup_done {
-            self.engine.run_startup();
-        }
     }
 
     fn window_event(
@@ -40,6 +36,9 @@ impl ApplicationHandler for AppRunner {
                 event_loop.exit();
             }
             WindowEvent::RedrawRequested => {
+                if !self.engine.startup_done {
+                    self.engine.run_startup();
+                }
                 self.engine.run_frame();
 
                 if self.engine.window.as_ref().is_some_and(|w| w.should_quit()) {

@@ -1,4 +1,4 @@
-pub use glam::{Vec2, Vec3, Vec4, Mat4, Quat};
+pub use glam::{Vec2, Vec3, Vec4, Mat3, Mat4, Quat};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Color {

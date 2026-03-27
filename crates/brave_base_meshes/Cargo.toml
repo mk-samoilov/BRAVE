@@ -1,0 +1,8 @@
+[package]
+name = "brave_base_meshes"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+brave_render = { path = "../brave_render" }
+ash = "0.38"

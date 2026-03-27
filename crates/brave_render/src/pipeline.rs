@@ -11,7 +11,7 @@ pub const MAX_POINT_LIGHTS: usize = 8;
 pub const MAX_SPOT_LIGHTS:  usize = 4;
 pub const SHADOW_MAP_SIZE:  u32   = 2048;
 pub const MAX_RT_OBJECTS:   usize = 64;
-pub const MSAA_SAMPLES: vk::SampleCountFlags = vk::SampleCountFlags::TYPE_4;
+pub const MSAA_SAMPLES: vk::SampleCountFlags = vk::SampleCountFlags::TYPE_8;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -102,7 +102,9 @@ impl Pipeline {
             .front_face(vk::FrontFace::COUNTER_CLOCKWISE);
 
         let multisampling = vk::PipelineMultisampleStateCreateInfo::default()
-            .rasterization_samples(MSAA_SAMPLES);
+            .rasterization_samples(MSAA_SAMPLES)
+            .sample_shading_enable(true)
+            .min_sample_shading(0.2);
 
         let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
             .depth_test_enable(true)

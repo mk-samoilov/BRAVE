@@ -113,19 +113,19 @@ impl Engine {
 
     pub(crate) fn create_renderer_if_pending(&mut self) {
         if self.render_pending && let Some(window) = &self.window {
-            let renderer = Renderer::new(window);
-            if let Some(assets) = &mut self.assets {
-                unsafe {
-                    assets.connect_renderer(
-                        renderer.ctx() as *const _,
-                        renderer.command_pool(),
-                        renderer.tex_descriptor_pool(),
-                        renderer.tex_desc_set_layout(),
-                    );
-                }
-            }
-            self.render = Some(renderer);
+            self.render = Some(Renderer::new(window));
             self.render_pending = false;
+
+            // Get pointer AFTER renderer is in its final location in self.render,
+            // otherwise VulkanContext moves when renderer is placed into the Option.
+            let ctx_ptr      = self.render.as_ref().unwrap().ctx()                 as *const _;
+            let cmd_pool     = self.render.as_ref().unwrap().command_pool();
+            let tex_pool     = self.render.as_ref().unwrap().tex_descriptor_pool();
+            let tex_layout   = self.render.as_ref().unwrap().tex_desc_set_layout();
+
+            if let Some(assets) = &mut self.assets {
+                unsafe { assets.connect_renderer(ctx_ptr, cmd_pool, tex_pool, tex_layout); }
+            }
             log::info!("Renderer created");
         }
     }

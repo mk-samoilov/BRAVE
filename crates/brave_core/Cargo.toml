@@ -8,7 +8,8 @@ brave_math    = { path = "../brave_math" }
 brave_window  = { path = "../brave_window" }
 brave_input   = { path = "../brave_input" }
 brave_ecs     = { path = "../brave_ecs" }
-brave_render  = { path = "../brave_render" }
+brave_render       = { path = "../brave_render" }
+brave_base_meshes  = { path = "../brave_base_meshes" }
 brave_assets  = { path = "../brave_assets" }
 brave_scene   = { path = "../brave_scene" }
 log           = "0.4"

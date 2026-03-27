@@ -269,7 +269,8 @@ impl VulkanContext {
             .collect();
 
         let extensions = [khr::swapchain::NAME.as_ptr()];
-        let features = vk::PhysicalDeviceFeatures::default();
+        let features = vk::PhysicalDeviceFeatures::default()
+            .sample_rate_shading(true);
 
         let create_info = vk::DeviceCreateInfo::default()
             .queue_create_infos(&queue_infos)

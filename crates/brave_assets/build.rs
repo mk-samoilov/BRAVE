@@ -13,6 +13,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use glam::{Mat3, Mat4, Vec3};
+
 // ─── .ast shared constants ────────────────────────────────────────────────────
 
 const MAGIC: &[u8; 4] = b"BRAV";
@@ -130,10 +132,17 @@ fn load_gltf(path: &Path, model_name: &str) -> (Vec<PrimitiveBuild>, Vec<Embedde
     let scene = doc.default_scene().or_else(|| doc.scenes().next())
         .expect("GLTF has no scenes");
 
-    let mut stack: Vec<gltf::Node> = scene.nodes().collect();
-    while let Some(node) = stack.pop() {
-        for child in node.children() { stack.push(child); }
+    // Stack holds (node, accumulated_world_transform)
+    let mut stack: Vec<(gltf::Node, Mat4)> = scene.nodes().map(|n| (n, Mat4::IDENTITY)).collect();
+    while let Some((node, parent_world)) = stack.pop() {
+        let local: Mat4 = Mat4::from_cols_array_2d(&node.transform().matrix());
+        let world = parent_world * local;
+
+        for child in node.children() { stack.push((child, world)); }
         let mesh = match node.mesh() { Some(m) => m, None => continue };
+
+        // Normal matrix = inverse transpose of upper-left 3×3 of world transform.
+        let normal_mat = Mat3::from_mat4(world).inverse().transpose();
 
         for prim in mesh.primitives() {
             let reader = prim.reader(|buf| Some(&buffers[buf.index()]));
@@ -142,7 +151,7 @@ fn load_gltf(path: &Path, model_name: &str) -> (Vec<PrimitiveBuild>, Vec<Embedde
                 .unwrap_or_else(|| panic!("build.rs: no positions in '{}'", path.display()))
                 .collect();
 
-            let normals: Vec<[f32; 3]> = reader.read_normals()
+            let normals_raw: Vec<[f32; 3]> = reader.read_normals()
                 .map(|it| it.collect())
                 .unwrap_or_else(|| vec![[0.0, 1.0, 0.0]; positions.len()]);
 
@@ -151,9 +160,13 @@ fn load_gltf(path: &Path, model_name: &str) -> (Vec<PrimitiveBuild>, Vec<Embedde
                 .unwrap_or_else(|| vec![[0.0, 0.0]; positions.len()]);
 
             let vertices: Vec<Vertex> = positions.iter()
-                .zip(normals.iter())
+                .zip(normals_raw.iter())
                 .zip(uvs.iter())
-                .map(|((p, n), uv)| Vertex { position: *p, normal: *n, uv: *uv })
+                .map(|((pos, norm), uv)| {
+                    let p = world.transform_point3(Vec3::from_array(*pos));
+                    let n = (normal_mat * Vec3::from_array(*norm)).normalize_or_zero();
+                    Vertex { position: p.to_array(), normal: n.to_array(), uv: *uv }
+                })
                 .collect();
 
             let indices: Vec<u32> = reader.read_indices()

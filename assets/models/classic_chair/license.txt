@@ -1,0 +1,11 @@
+Model Information:
+* title:	Classic chair
+* source:	https://sketchfab.com/3d-models/classic-chair-2182f7926517462e8d547a750780e008
+* author:	JestAK (https://sketchfab.com/JestAK)
+
+Model License:
+* license type:	CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+* requirements:	Author must be credited. Commercial use is allowed.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "Classic chair" (https://sketchfab.com/3d-models/classic-chair-2182f7926517462e8d547a750780e008) by JestAK (https://sketchfab.com/JestAK) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)

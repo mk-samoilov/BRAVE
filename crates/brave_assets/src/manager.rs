@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::path::PathBuf;
 
 use ash::vk;
-use brave_render::{GpuTexture, Mesh, VulkanContext, Vertex};
+use brave_render::{GpuTexture, Mesh, VulkanContext};
 
 #[cfg(debug_assertions)]
 use crate::gltf_loader;
@@ -131,34 +131,45 @@ impl AssetManager {
             let path = self.find_model(name);
             let (primitives, embedded) = gltf_loader::load(&path, name);
 
-            // Upload embedded textures into the GPU cache
-            for tex in embedded {
+            // Extract GPU context values before any mutable borrow of self.
+            let (ctx_ptr, command_pool, tex_descriptor_pool, tex_desc_set_layout) = {
+                let gpu = self.gpu.as_ref().expect("AssetManager not connected to renderer");
+                (gpu.ctx, gpu.command_pool, gpu.tex_descriptor_pool, gpu.tex_desc_set_layout)
+            };
+            let ctx = unsafe { &*ctx_ptr };
+
+            // ONE command buffer for all uploads — one queue_wait_idle for the whole model.
+            let mut batch = brave_render::UploadBatch::new(ctx, command_pool);
+
+            // Upload albedo textures into batch (skip if already cached).
+            for tex in &embedded {
                 if !self.texture_cache.contains_key(&tex.name) {
-                    let gpu_tex = self.upload_texture_data(tex.width, tex.height, &tex.pixels);
+                    let gpu_tex = brave_render::GpuTexture::from_rgba8_batched(
+                        ctx, &mut batch,
+                        tex_descriptor_pool, tex_desc_set_layout,
+                        tex.width, tex.height, &tex.pixels,
+                    );
                     self.texture_cache.insert(tex.name.clone(), gpu_tex);
                 }
             }
 
-            let gpu_primitives = primitives.into_iter().map(|p| {
-                let mesh = self.upload_mesh(&p.vertices, &p.indices);
-                let texture = p.material.albedo_tex_index
-                    .map(|i| {
-                        let tex_name = format!("{}_tex_{}", name, i);
-                        self.texture_cache.get(&tex_name).cloned()
-                            .unwrap_or_else(|| {
-                                // shouldn't happen — embedded was processed above
-                                log::warn!("AssetManager: texture '{}' not in cache", tex_name);
-                                Arc::clone(self.texture_cache.values().next().unwrap())
-                            })
-                    });
-                LoadedPrimitive {
-                    mesh,
-                    base_color: p.material.base_color_factor,
-                    texture,
-                }
+            // Upload all mesh primitives into batch.
+            let gpu_primitives: Vec<LoadedPrimitive> = primitives.into_iter().map(|p| {
+                let mesh = brave_render::Mesh::new_batched(ctx, &mut batch, &p.vertices, &p.indices);
+                let texture = p.material.albedo_tex_index.map(|i| {
+                    let tex_name = format!("{}_tex_{}", name, i);
+                    self.texture_cache.get(&tex_name).cloned().unwrap_or_else(|| {
+                        log::warn!("AssetManager: texture '{}' not in cache", tex_name);
+                        Arc::clone(self.texture_cache.values().next().unwrap())
+                    })
+                });
+                LoadedPrimitive { mesh, base_color: p.material.base_color_factor, texture }
             }).collect();
 
-            LoadedModel { primitives: gpu_primitives }
+            // Single GPU submit + wait for the entire model.
+            batch.flush(ctx, ctx.graphics_queue);
+
+            return LoadedModel { primitives: gpu_primitives };
         }
 
         #[cfg(not(debug_assertions))]
@@ -211,6 +222,7 @@ impl AssetManager {
 
     // ─── Internal loaders ────────────────────────────────────────────────────
 
+    #[cfg(not(debug_assertions))]
     fn upload_mesh(&self, vertices: &[Vertex], indices: &[u32]) -> Arc<Mesh> {
         let gpu  = self.gpu.as_ref().expect("AssetManager not connected to renderer");
         let ctx  = unsafe { &*gpu.ctx };
