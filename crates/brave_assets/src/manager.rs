@@ -9,8 +9,6 @@ use std::path::PathBuf;
 use ash::vk;
 use brave_render::{GpuTexture, Mesh, VulkanContext, Vertex};
 
-#[cfg(not(debug_assertions))]
-use crate::ast::AstFile;
 #[cfg(debug_assertions)]
 use crate::gltf_loader;
 use crate::image_loader::TextureData;
