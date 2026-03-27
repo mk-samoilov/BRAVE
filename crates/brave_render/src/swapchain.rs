@@ -315,6 +315,8 @@ impl Swapchain {
         (image, memory, view)
     }
 
+    /// # Safety
+    /// All Vulkan resources must not be in use by the GPU.
     pub unsafe fn destroy_resources(&self, device: &ash::Device) {
         unsafe {
             device.destroy_image_view(self.msaa_color_view, None);

@@ -43,6 +43,13 @@ layout(std430, set = 0, binding = 2) readonly buffer SceneAabbs {
     AabbEntry aabbs[];
 } scene;
 
+layout(set = 1, binding = 0) uniform sampler2D albedo_tex;
+
+layout(push_constant) uniform PushConst {
+    mat4 model;
+    vec4 base_color;
+} push;
+
 layout(location = 0) out vec4 out_color;
 
 // https://iquilezles.org/articles/boxfunctions/
@@ -164,10 +171,10 @@ float attenuate(float dist, float range) {
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 void main() {
-    vec3 normal    = normalize(frag_normal);
-    vec3 view_dir  = normalize(frame.cam_pos.xyz - frag_world_pos);
-    vec3 base_color = vec3(0.8, 0.8, 0.8);
-    vec3 result    = vec3(0.0);
+    vec3 normal     = normalize(frag_normal);
+    vec3 view_dir   = normalize(frame.cam_pos.xyz - frag_world_pos);
+    vec3 base_color = texture(albedo_tex, frag_uv).rgb * push.base_color.rgb;
+    vec3 result     = vec3(0.0);
 
     // Hemisphere ambient
     vec3 sky_col    = vec3(0.18, 0.26, 0.42);

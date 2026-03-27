@@ -8,8 +8,7 @@ use ash::ext;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
 #[cfg(debug_assertions)]
-const VALIDATION_LAYER: &CStr =
-    unsafe { CStr::from_bytes_with_nul_unchecked(b"VK_LAYER_KHRONOS_validation\0") };
+const VALIDATION_LAYER: &CStr = c"VK_LAYER_KHRONOS_validation";
 
 pub struct QueueFamilies {
     pub graphics: u32,

@@ -5,7 +5,9 @@ mod level;
 mod player;
 
 fn main() {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .filter_module("calloop", log::LevelFilter::Error)
+        .init();
 
     let mut game: Engine = Engine::new();
 

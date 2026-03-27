@@ -210,6 +210,7 @@ version = "0.1.0"
 dependencies = [
  "brave_core",
  "env_logger",
+ "log",
 ]
 
 [[package]]

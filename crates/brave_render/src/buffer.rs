@@ -35,7 +35,7 @@ impl Buffer {
     }
 
     pub fn upload<T: Copy>(&self, ctx: &VulkanContext, data: &[T]) {
-        let size = (data.len() * std::mem::size_of::<T>()) as vk::DeviceSize;
+        let size = std::mem::size_of_val(data) as vk::DeviceSize;
         unsafe {
             let ptr = ctx
                 .device
@@ -61,7 +61,7 @@ pub fn upload_via_staging<T: Copy>(
     data: &[T],
     usage: vk::BufferUsageFlags,
 ) -> Buffer {
-    let size = (data.len() * std::mem::size_of::<T>()) as vk::DeviceSize;
+    let size = std::mem::size_of_val(data) as vk::DeviceSize;
 
     let staging = Buffer::new(
         ctx,

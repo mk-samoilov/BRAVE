@@ -40,6 +40,7 @@ layout(set = 0, binding = 0) uniform FrameUbo {
 
 layout(push_constant) uniform PushConst {
     mat4 model;
+    vec4 base_color;
 } push;
 
 layout(location = 0) out vec3 frag_normal;

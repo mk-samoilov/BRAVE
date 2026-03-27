@@ -47,7 +47,8 @@ pub struct FrameUbo {
 
 #[repr(C)]
 pub struct PushConstants {
-    pub model: [f32; 16],
+    pub model:      [f32; 16],
+    pub base_color: [f32; 4],
 }
 
 #[repr(C)]
@@ -57,10 +58,11 @@ pub struct ShadowPush {
 }
 
 pub struct Pipeline {
-    pub render_pass:     vk::RenderPass,
-    pub layout:          vk::PipelineLayout,
-    pub handle:          vk::Pipeline,
-    pub desc_set_layout: vk::DescriptorSetLayout,
+    pub render_pass:         vk::RenderPass,
+    pub layout:              vk::PipelineLayout,
+    pub handle:              vk::Pipeline,
+    pub desc_set_layout:     vk::DescriptorSetLayout,
+    pub tex_desc_set_layout: vk::DescriptorSetLayout,
 }
 
 impl Pipeline {
@@ -143,12 +145,28 @@ impl Pipeline {
         };
 
         let push_range = vk::PushConstantRange {
-            stage_flags: vk::ShaderStageFlags::VERTEX,
+            stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
             offset: 0,
             size: std::mem::size_of::<PushConstants>() as u32,
         };
 
-        let set_layouts = [desc_set_layout];
+        // set = 1: per-object albedo texture
+        let tex_binding = vk::DescriptorSetLayoutBinding::default()
+            .binding(0)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::FRAGMENT);
+        let tex_desc_set_layout = unsafe {
+            ctx.device
+                .create_descriptor_set_layout(
+                    &vk::DescriptorSetLayoutCreateInfo::default()
+                        .bindings(std::slice::from_ref(&tex_binding)),
+                    None,
+                )
+                .unwrap()
+        };
+
+        let set_layouts = [desc_set_layout, tex_desc_set_layout];
         let layout = unsafe {
             ctx.device
                 .create_pipeline_layout(
@@ -187,7 +205,7 @@ impl Pipeline {
             ctx.device.destroy_shader_module(frag_module, None);
         }
 
-        Self { render_pass, layout, handle, desc_set_layout }
+        Self { render_pass, layout, handle, desc_set_layout, tex_desc_set_layout }
     }
 
     pub fn destroy(&self, device: &ash::Device) {
@@ -196,6 +214,7 @@ impl Pipeline {
             device.destroy_pipeline_layout(self.layout, None);
             device.destroy_render_pass(self.render_pass, None);
             device.destroy_descriptor_set_layout(self.desc_set_layout, None);
+            device.destroy_descriptor_set_layout(self.tex_desc_set_layout, None);
         }
     }
 }

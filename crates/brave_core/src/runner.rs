@@ -42,7 +42,7 @@ impl ApplicationHandler for AppRunner {
             WindowEvent::RedrawRequested => {
                 self.engine.run_frame();
 
-                if self.engine.window.as_ref().map_or(false, |w| w.should_quit()) {
+                if self.engine.window.as_ref().is_some_and(|w| w.should_quit()) {
                     event_loop.exit();
                     return;
                 }
@@ -62,10 +62,10 @@ impl ApplicationHandler for AppRunner {
         _device_id: DeviceId,
         event: DeviceEvent,
     ) {
-        if let DeviceEvent::MouseMotion { delta } = event {
-            if let Some(input) = &mut self.engine.input {
-                input.handle_mouse_motion(delta);
-            }
+        if let DeviceEvent::MouseMotion { delta } = event
+            && let Some(input) = &mut self.engine.input
+        {
+            input.handle_mouse_motion(delta);
         }
     }
 

@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::collections::HashMap;
 
 use ash::vk;
@@ -14,6 +15,7 @@ use crate::pipeline::{
     SHADOW_MAP_SIZE, MAX_POINT_LIGHTS, MAX_SPOT_LIGHTS, MAX_RT_OBJECTS,
 };
 use crate::swapchain::Swapchain;
+use crate::texture::GpuTexture;
 
 const FRAMES_IN_FLIGHT: usize = 2;
 
@@ -45,6 +47,9 @@ pub struct Renderer {
     frames:                    Vec<FrameData>,
     render_finished_per_image: Vec<vk::Semaphore>,
     descriptor_pool:           vk::DescriptorPool,
+    // default_texture must be declared BEFORE tex_descriptor_pool so it drops first
+    default_texture:           Option<Arc<GpuTexture>>,
+    tex_descriptor_pool:       vk::DescriptorPool,
     current_frame:             usize,
     _skybox:                   Option<()>,
 }
@@ -145,6 +150,11 @@ impl Renderer {
             .map(|_| create_semaphore(&ctx))
             .collect();
 
+        let tex_descriptor_pool = create_tex_descriptor_pool(&ctx, 1024);
+        let default_texture = Some(GpuTexture::white(
+            &ctx, command_pool, tex_descriptor_pool, pipeline.tex_desc_set_layout,
+        ));
+
         Self {
             ctx,
             swapchain,
@@ -156,6 +166,8 @@ impl Renderer {
             frames,
             render_finished_per_image,
             descriptor_pool,
+            default_texture,
+            tex_descriptor_pool,
             current_frame: 0,
             _skybox: None,
         }
@@ -505,11 +517,14 @@ impl Renderer {
                 &[],
             );
 
+            let default_tex_set = self.default_texture.as_ref().unwrap().descriptor_set;
+
             for entity in world.entities() {
                 if !entity.has::<MeshRenderer>() || !entity.has::<Transform>() {
                     continue;
                 }
-                let mesh = &entity.get::<MeshRenderer>().mesh;
+                let mr = entity.get::<MeshRenderer>();
+                let mesh = &mr.mesh;
                 let model = world_transforms
                     .get(&entity.name)
                     .copied()
@@ -518,7 +533,24 @@ impl Renderer {
                             .map(|t| t.matrix())
                             .unwrap_or(Mat4::IDENTITY)
                     });
-                let push = PushConstants { model: model.to_cols_array() };
+
+                // bind per-object albedo texture (set = 1)
+                let tex_set = mr.texture.as_ref()
+                    .map(|t| t.descriptor_set)
+                    .unwrap_or(default_tex_set);
+                self.ctx.device.cmd_bind_descriptor_sets(
+                    cmd,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    self.pipeline.layout,
+                    1,
+                    &[tex_set],
+                    &[],
+                );
+
+                let push = PushConstants {
+                    model:      model.to_cols_array(),
+                    base_color: mr.base_color,
+                };
                 let push_bytes = std::slice::from_raw_parts(
                     &push as *const PushConstants as *const u8,
                     std::mem::size_of::<PushConstants>(),
@@ -526,7 +558,7 @@ impl Renderer {
                 self.ctx.device.cmd_push_constants(
                     cmd,
                     self.pipeline.layout,
-                    vk::ShaderStageFlags::VERTEX,
+                    vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
                     0,
                     push_bytes,
                 );
@@ -658,6 +690,27 @@ impl Renderer {
         &self.ctx
     }
 
+    pub fn tex_descriptor_pool(&self) -> vk::DescriptorPool {
+        self.tex_descriptor_pool
+    }
+
+    pub fn tex_desc_set_layout(&self) -> vk::DescriptorSetLayout {
+        self.pipeline.tex_desc_set_layout
+    }
+
+    /// Upload RGBA8 pixels to GPU and return a cached Arc<GpuTexture>.
+    pub fn create_texture(&self, width: u32, height: u32, pixels: &[u8]) -> Arc<GpuTexture> {
+        GpuTexture::from_rgba8(
+            &self.ctx,
+            self.command_pool,
+            self.tex_descriptor_pool,
+            self.pipeline.tex_desc_set_layout,
+            width,
+            height,
+            pixels,
+        )
+    }
+
     pub fn wait_idle(&self) {
         unsafe { self.ctx.device.device_wait_idle().ok(); }
     }
@@ -696,6 +749,11 @@ impl Drop for Renderer {
             self.shadow_pipeline.destroy(&self.ctx.device);
             self.pipeline.destroy(&self.ctx.device);
             self.ctx.device.destroy_descriptor_pool(self.descriptor_pool, None);
+
+            // Drop default_texture first so its descriptor set is freed before pool
+            self.default_texture = None;
+            self.ctx.device.destroy_descriptor_pool(self.tex_descriptor_pool, None);
+
             self.ctx.device.destroy_command_pool(self.command_pool, None);
         }
     }
@@ -818,6 +876,19 @@ fn create_descriptor_pool(ctx: &VulkanContext, count: u32) -> vk::DescriptorPool
         .pool_sizes(&pool_sizes)
         .max_sets(count);
     unsafe { ctx.device.create_descriptor_pool(&create_info, None).unwrap() }
+}
+
+fn create_tex_descriptor_pool(ctx: &VulkanContext, max_textures: u32) -> vk::DescriptorPool {
+    let pool_size = vk::DescriptorPoolSize {
+        ty:               vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+        descriptor_count: max_textures,
+    };
+    let info = vk::DescriptorPoolCreateInfo::default()
+        // FREE_DESCRIPTOR_SET_BIT lets GpuTexture free its set individually on drop
+        .flags(vk::DescriptorPoolCreateFlags::FREE_DESCRIPTOR_SET)
+        .max_sets(max_textures)
+        .pool_sizes(std::slice::from_ref(&pool_size));
+    unsafe { ctx.device.create_descriptor_pool(&info, None).unwrap() }
 }
 
 fn create_semaphore(ctx: &VulkanContext) -> vk::Semaphore {

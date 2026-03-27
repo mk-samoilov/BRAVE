@@ -12,7 +12,7 @@ pub fn setup(game: &mut Engine) {
 
     game.world.spawn("sun")
         .with(Transform::new(4.9, 9.1, -6.2))
-        .with(DirectionalLight { color: Color::WHITE, intensity: 5.2, shadows: true });
+        .with(DirectionalLight { color: Color::WHITE, intensity: 6.2, shadows: true });
 
     setup_level(game);
 }

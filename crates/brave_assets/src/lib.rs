@@ -5,4 +5,4 @@ pub mod manager;
 pub mod shader_loader;
 
 pub use image_loader::TextureData;
-pub use manager::{Asset, AssetFormat, AssetManager};
+pub use manager::{Asset, AssetFormat, AssetManager, LoadedModel, LoadedPrimitive};

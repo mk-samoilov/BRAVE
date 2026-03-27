@@ -10,3 +10,4 @@ edition = "2024"
 [dependencies]
 brave_core   = { path = "crates/brave_core" }
 env_logger   = "0.11"
+log          = "0.4"

@@ -6,9 +6,11 @@ pub mod mesh;
 pub mod pipeline;
 pub mod renderer;
 pub mod swapchain;
+pub mod texture;
 
 pub use camera::Camera;
 pub use context::VulkanContext;
 pub use light::{AmbientLight, DirectionalLight, PointLight, SpotLight};
 pub use mesh::{Mesh, MeshRenderer, Vertex};
 pub use renderer::Renderer;
+pub use texture::GpuTexture;

@@ -39,10 +39,10 @@ pub fn detach(name: &str, world: &mut World) {
 
     if let Some(parent_name) = parent_name {
         world.get_mut(name).remove::<Parent>();
-        if world.exists(&parent_name) {
-            if let Some(children) = world.get_mut(&parent_name).try_get_mut::<Children>() {
-                children.remove(name);
-            }
+        if world.exists(&parent_name)
+            && let Some(children) = world.get_mut(&parent_name).try_get_mut::<Children>()
+        {
+            children.remove(name);
         }
     }
 }

@@ -62,7 +62,7 @@ impl World {
     pub fn names_with<T: Component>(&self) -> Vec<String> {
         self.order
             .iter()
-            .filter(|n| self.entities.get(*n).map_or(false, |e| e.has::<T>()))
+            .filter(|n| self.entities.get(*n).is_some_and(|e| e.has::<T>()))
             .cloned()
             .collect()
     }

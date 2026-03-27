@@ -6,6 +6,7 @@ use brave_ecs::Component;
 
 use crate::buffer::{upload_via_staging, Buffer};
 use crate::context::VulkanContext;
+use crate::texture::GpuTexture;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -146,12 +147,22 @@ impl Drop for Mesh {
 }
 
 pub struct MeshRenderer {
-    pub mesh: Arc<Mesh>,
+    pub mesh:       Arc<Mesh>,
+    pub texture:    Option<Arc<GpuTexture>>,
+    pub base_color: [f32; 4],
 }
 
 impl MeshRenderer {
     pub fn new(mesh: Arc<Mesh>) -> Self {
-        Self { mesh }
+        Self { mesh, texture: None, base_color: [1.0, 1.0, 1.0, 1.0] }
+    }
+
+    pub fn with_texture(mesh: Arc<Mesh>, texture: Arc<GpuTexture>) -> Self {
+        Self { mesh, texture: Some(texture), base_color: [1.0, 1.0, 1.0, 1.0] }
+    }
+
+    pub fn with_color(mesh: Arc<Mesh>, r: f32, g: f32, b: f32) -> Self {
+        Self { mesh, texture: None, base_color: [r, g, b, 1.0] }
     }
 }
 

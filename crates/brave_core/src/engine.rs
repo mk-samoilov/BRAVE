@@ -28,19 +28,20 @@ impl Script {
 impl Component for Script {}
 
 pub struct Engine {
-    pub world: World,
+    pub world:  World,
     pub window: Option<Window>,
-    pub input: Option<Input>,
-    pub render: Option<Renderer>,
+    pub input:  Option<Input>,
+    // assets MUST be declared before render so its texture cache drops first
     pub assets: Option<AssetManager>,
-    pub time: Time,
-    systems: Vec<SystemFn>,
-    startup_systems: Vec<SystemFn>,
-    registered_plugins: HashSet<TypeId>,
+    pub render: Option<Renderer>,
+    pub time:   Time,
+    systems:               Vec<SystemFn>,
+    startup_systems:       Vec<SystemFn>,
+    registered_plugins:    HashSet<TypeId>,
     pending_window_config: Option<WindowConfig>,
-    render_pending: bool,
-    pub(crate) accumulator: f32,
-    pub(crate) startup_done: bool,
+    render_pending:        bool,
+    pub(crate) accumulator:   f32,
+    pub(crate) startup_done:  bool,
 }
 
 impl Engine {
@@ -111,21 +112,21 @@ impl Engine {
     }
 
     pub(crate) fn create_renderer_if_pending(&mut self) {
-        if self.render_pending {
-            if let Some(window) = &self.window {
-                let renderer = Renderer::new(window);
-                if let Some(assets) = &mut self.assets {
-                    unsafe {
-                        assets.connect_renderer(
-                            renderer.ctx() as *const _,
-                            renderer.command_pool(),
-                        );
-                    }
+        if self.render_pending && let Some(window) = &self.window {
+            let renderer = Renderer::new(window);
+            if let Some(assets) = &mut self.assets {
+                unsafe {
+                    assets.connect_renderer(
+                        renderer.ctx() as *const _,
+                        renderer.command_pool(),
+                        renderer.tex_descriptor_pool(),
+                        renderer.tex_desc_set_layout(),
+                    );
                 }
-                self.render = Some(renderer);
-                self.render_pending = false;
-                log::info!("Renderer created");
             }
+            self.render = Some(renderer);
+            self.render_pending = false;
+            log::info!("Renderer created");
         }
     }
 
