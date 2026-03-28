@@ -1,11 +1,13 @@
 [package]
-name = "brv_core"
+name = "brv_engine"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-brv_engine = { path = "../brv_engine" }
 brv_window = { path = "../brv_window" }
 brv_input = { path = "../brv_input" }
 brv_math = { path = "../brv_math" }
 brv_colors = { path = "../brv_colors" }
+glam = "0.29"
+winit = "0.29"
+log = "0.4"

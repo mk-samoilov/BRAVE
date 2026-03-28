@@ -11,3 +11,4 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+brv_core = { path = "crates/brv_core" }

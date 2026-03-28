@@ -116,17 +116,44 @@ dependencies = [
 [[package]]
 name = "brave-game"
 version = "0.1.0"
-
-[[package]]
-name = "brave_core"
-version = "0.1.0"
 dependencies = [
- "log",
+ "brv_core",
 ]
 
 [[package]]
 name = "brv_colors"
 version = "0.1.0"
+
+[[package]]
+name = "brv_core"
+version = "0.1.0"
+dependencies = [
+ "brv_colors",
+ "brv_engine",
+ "brv_input",
+ "brv_math",
+ "brv_window",
+]
+
+[[package]]
+name = "brv_ecs"
+version = "0.1.0"
+dependencies = [
+ "brv_engine",
+]
+
+[[package]]
+name = "brv_engine"
+version = "0.1.0"
+dependencies = [
+ "brv_colors",
+ "brv_input",
+ "brv_math",
+ "brv_window",
+ "glam",
+ "log",
+ "winit",
+]
 
 [[package]]
 name = "brv_input"
