@@ -3,6 +3,7 @@ use brave_core::prelude::*;
 mod game;
 mod level;
 mod player;
+mod utils;
 
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))

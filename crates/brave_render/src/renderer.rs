@@ -3,7 +3,7 @@ use std::collections::HashMap;
 
 use ash::vk;
 use brave_ecs::{Transform, World};
-use brave_math::{Mat4, Vec3};
+use brave_math::{Mat4, Vec3, Vec4};
 
 use crate::buffer::Buffer;
 use crate::camera::Camera;
@@ -11,8 +11,8 @@ use crate::context::VulkanContext;
 use crate::light::{AmbientLight, DirectionalLight, PointLight, SpotLight};
 use crate::mesh::MeshRenderer;
 use crate::pipeline::{
-    AabbEntry, FrameUbo, Pipeline, PushConstants, ShadowPipeline, ShadowPush,
-    SHADOW_MAP_SIZE, MAX_POINT_LIGHTS, MAX_SPOT_LIGHTS, MAX_RT_OBJECTS,
+    FrameUbo, Pipeline, PushConstants, ShadowPipeline, ShadowPush, SkyboxPipeline,
+    SHADOW_MAP_SIZE, MAX_POINT_LIGHTS, MAX_SPOT_LIGHTS,
 };
 use crate::swapchain::Swapchain;
 use crate::texture::GpuTexture;
@@ -24,7 +24,6 @@ struct FrameData {
     in_flight:       vk::Fence,
     command_buffer:  vk::CommandBuffer,
     ubo_buffer:      Buffer,
-    ssbo_buffer:     Buffer,
     descriptor_set:  vk::DescriptorSet,
 }
 
@@ -41,17 +40,20 @@ pub struct Renderer {
     swapchain:                 Swapchain,
     pipeline:                  Pipeline,
     shadow_pipeline:           ShadowPipeline,
+    skybox_pipeline:           Option<SkyboxPipeline>,
     shadow_map:                ShadowMap,
     framebuffers:              Vec<vk::Framebuffer>,
     command_pool:              vk::CommandPool,
     frames:                    Vec<FrameData>,
     render_finished_per_image: Vec<vk::Semaphore>,
     descriptor_pool:           vk::DescriptorPool,
-    // default_texture must be declared BEFORE tex_descriptor_pool so it drops first
     default_texture:           Option<Arc<GpuTexture>>,
+    default_normal_map:        Option<Arc<GpuTexture>>,
+    default_orm_map:           Option<Arc<GpuTexture>>,
+    env_map:                   Option<Arc<GpuTexture>>,
+    skybox_blur:               f32,
     tex_descriptor_pool:       vk::DescriptorPool,
     current_frame:             usize,
-    _skybox:                   Option<()>,
 }
 
 impl Renderer {
@@ -77,21 +79,12 @@ impl Renderer {
         let cmd_buffers = create_command_buffers(&ctx, command_pool, FRAMES_IN_FLIGHT);
         let ubo_size = std::mem::size_of::<FrameUbo>() as vk::DeviceSize;
 
-        let ssbo_size = (std::mem::size_of::<AabbEntry>() * MAX_RT_OBJECTS) as vk::DeviceSize;
-
         let frames: Vec<FrameData> = (0..FRAMES_IN_FLIGHT)
             .map(|i| {
                 let ubo_buffer = Buffer::new(
                     &ctx,
                     ubo_size,
                     vk::BufferUsageFlags::UNIFORM_BUFFER,
-                    vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-                );
-
-                let ssbo_buffer = Buffer::new(
-                    &ctx,
-                    ssbo_size,
-                    vk::BufferUsageFlags::STORAGE_BUFFER,
                     vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
                 );
 
@@ -119,20 +112,8 @@ impl Renderer {
                     .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                     .image_info(std::slice::from_ref(&image_info));
 
-                let ssbo_info = vk::DescriptorBufferInfo {
-                    buffer: ssbo_buffer.handle,
-                    offset: 0,
-                    range: ssbo_size,
-                };
-                let write_ssbo = vk::WriteDescriptorSet::default()
-                    .dst_set(descriptor_sets[i])
-                    .dst_binding(2)
-                    .dst_array_element(0)
-                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                    .buffer_info(std::slice::from_ref(&ssbo_info));
-
                 unsafe {
-                    ctx.device.update_descriptor_sets(&[write_ubo, write_sampler, write_ssbo], &[]);
+                    ctx.device.update_descriptor_sets(&[write_ubo, write_sampler], &[]);
                 }
 
                 FrameData {
@@ -140,7 +121,6 @@ impl Renderer {
                     in_flight: create_fence(&ctx, true),
                     command_buffer: cmd_buffers[i],
                     ubo_buffer,
-                    ssbo_buffer,
                     descriptor_set: descriptor_sets[i],
                 }
             })
@@ -150,8 +130,14 @@ impl Renderer {
             .map(|_| create_semaphore(&ctx))
             .collect();
 
-        let tex_descriptor_pool = create_tex_descriptor_pool(&ctx, 1024);
+        let tex_descriptor_pool = create_tex_descriptor_pool(&ctx, 2048);
         let default_texture = Some(GpuTexture::white(
+            &ctx, command_pool, tex_descriptor_pool, pipeline.tex_desc_set_layout,
+        ));
+        let default_normal_map = Some(GpuTexture::flat_normal(
+            &ctx, command_pool, tex_descriptor_pool, pipeline.tex_desc_set_layout,
+        ));
+        let default_orm_map = Some(GpuTexture::white(
             &ctx, command_pool, tex_descriptor_pool, pipeline.tex_desc_set_layout,
         ));
 
@@ -160,6 +146,7 @@ impl Renderer {
             swapchain,
             pipeline,
             shadow_pipeline,
+            skybox_pipeline: None,
             shadow_map,
             framebuffers,
             command_pool,
@@ -167,9 +154,12 @@ impl Renderer {
             render_finished_per_image,
             descriptor_pool,
             default_texture,
+            default_normal_map,
+            default_orm_map,
+            env_map: None,
+            skybox_blur: 0.0,
             tex_descriptor_pool,
             current_frame: 0,
-            _skybox: None,
         }
     }
 
@@ -209,8 +199,7 @@ impl Renderer {
 
         unsafe { self.ctx.device.reset_fences(&[frame.in_flight]).unwrap() };
 
-        let rt_count = self.update_ssbo(world, world_transforms);
-        self.update_ubo(world, width, height, rt_count);
+        self.update_ubo(world, width, height);
 
         let frame = &self.frames[self.current_frame];
         unsafe {
@@ -259,59 +248,7 @@ impl Renderer {
         self.current_frame = (self.current_frame + 1) % FRAMES_IN_FLIGHT;
     }
 
-    fn update_ssbo(&mut self, world: &World, world_transforms: &HashMap<String, Mat4>) -> i32 {
-        let mut entries: Vec<AabbEntry> = Vec::new();
-
-        for entity in world.entities() {
-            if !entity.has::<MeshRenderer>() { continue; }
-            if entries.len() >= MAX_RT_OBJECTS { break; }
-
-            let mesh = &entity.get::<MeshRenderer>().mesh;
-            let (lmin, lmax) = mesh.local_bounds;
-            let model = world_transforms
-                .get(&entity.name)
-                .copied()
-                .unwrap_or_else(|| {
-                    entity.try_get::<Transform>()
-                        .map(|t| t.matrix())
-                        .unwrap_or(Mat4::IDENTITY)
-                });
-
-            let corners = [
-                [lmin[0], lmin[1], lmin[2]],
-                [lmax[0], lmin[1], lmin[2]],
-                [lmin[0], lmax[1], lmin[2]],
-                [lmax[0], lmax[1], lmin[2]],
-                [lmin[0], lmin[1], lmax[2]],
-                [lmax[0], lmin[1], lmax[2]],
-                [lmin[0], lmax[1], lmax[2]],
-                [lmax[0], lmax[1], lmax[2]],
-            ];
-
-            let mut wmin = [f32::MAX; 3];
-            let mut wmax = [f32::MIN; 3];
-            for c in &corners {
-                let w = model.transform_point3(Vec3::from_array(*c));
-                for i in 0..3 {
-                    wmin[i] = wmin[i].min(w[i]);
-                    wmax[i] = wmax[i].max(w[i]);
-                }
-            }
-
-            entries.push(AabbEntry {
-                min_pt: [wmin[0], wmin[1], wmin[2], 0.0],
-                max_pt: [wmax[0], wmax[1], wmax[2], 0.0],
-            });
-        }
-
-        let count = entries.len() as i32;
-        if !entries.is_empty() {
-            self.frames[self.current_frame].ssbo_buffer.upload(&self.ctx, &entries);
-        }
-        count
-    }
-
-    fn update_ubo(&mut self, world: &World, width: u32, height: u32, rt_aabb_count: i32) {
+    fn update_ubo(&mut self, world: &World, width: u32, height: u32) {
         let aspect = width as f32 / height.max(1) as f32;
 
         let (view, proj, cam_pos) = self.find_camera(world, aspect);
@@ -364,8 +301,6 @@ impl Renderer {
             shadows_enabled: if shadows_enabled { 1 } else { 0 },
             _pad2: [0; 3],
             cam_pos: [cam_pos.x, cam_pos.y, cam_pos.z, 1.0],
-            rt_aabb_count,
-            _pad3: [0; 3],
         };
 
         self.frames[self.current_frame].ubo_buffer.upload(&self.ctx, std::slice::from_ref(&ubo));
@@ -402,7 +337,8 @@ impl Renderer {
                 let dir   = tr.position.normalize();
                 let light_pos = tr.position;
                 let light_view = Mat4::look_at_rh(light_pos, Vec3::ZERO, Vec3::Y);
-                let light_proj = Mat4::orthographic_rh(-20.0, 20.0, -20.0, 20.0, 0.1, 100.0);
+                let mut light_proj = Mat4::orthographic_rh(-20.0, 20.0, -20.0, 20.0, 1.0, 80.0);
+                light_proj.y_axis.y *= -1.0; // Vulkan clip-space Y is down; mirror camera convention
                 let light_space = light_proj * light_view;
 
                 return (
@@ -508,6 +444,34 @@ impl Renderer {
             self.ctx.device.cmd_set_viewport(cmd, 0, &[viewport]);
             self.ctx.device.cmd_set_scissor(cmd, 0, &[scissor]);
 
+            if let (Some(sky_pipeline), Some(env)) = (&self.skybox_pipeline, &self.env_map) {
+                self.ctx.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, sky_pipeline.handle);
+                self.ctx.device.cmd_bind_descriptor_sets(
+                    cmd, vk::PipelineBindPoint::GRAPHICS, sky_pipeline.layout,
+                    0, &[env.descriptor_set], &[],
+                );
+
+                let aspect = extent.width as f32 / extent.height.max(1) as f32;
+                let (view, proj, _) = self.find_camera(world, aspect);
+                let mut view_rot = view;
+                view_rot.w_axis = Vec4::new(0.0, 0.0, 0.0, 1.0);
+                let inv_proj_view = (proj * view_rot).inverse();
+                let ipv_cols = inv_proj_view.to_cols_array();
+                let mut sky_push = [0u8; 68];
+                sky_push[..64].copy_from_slice(
+                    std::slice::from_raw_parts(ipv_cols.as_ptr() as *const u8, 64)
+                );
+                sky_push[64..68].copy_from_slice(&self.skybox_blur.to_le_bytes());
+                self.ctx.device.cmd_push_constants(
+                    cmd, sky_pipeline.layout,
+                    vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                    0, &sky_push,
+                );
+
+                self.ctx.device.cmd_draw(cmd, 3, 1, 0, 0);
+            }
+
+            self.ctx.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipeline.handle);
             self.ctx.device.cmd_bind_descriptor_sets(
                 cmd,
                 vk::PipelineBindPoint::GRAPHICS,
@@ -517,7 +481,13 @@ impl Renderer {
                 &[],
             );
 
-            let default_tex_set = self.default_texture.as_ref().unwrap().descriptor_set;
+            let default_tex_set    = self.default_texture.as_ref().unwrap().descriptor_set;
+            let default_normal_set = self.default_normal_map.as_ref().unwrap().descriptor_set;
+            let default_orm_set    = self.default_orm_map.as_ref().unwrap().descriptor_set;
+            let default_env_set    = self.env_map.as_ref()
+                .or(self.default_texture.as_ref())
+                .unwrap()
+                .descriptor_set;
 
             for entity in world.entities() {
                 if !entity.has::<MeshRenderer>() || !entity.has::<Transform>() {
@@ -534,22 +504,30 @@ impl Renderer {
                             .unwrap_or(Mat4::IDENTITY)
                     });
 
-                // bind per-object albedo texture (set = 1)
                 let tex_set = mr.texture.as_ref()
                     .map(|t| t.descriptor_set)
                     .unwrap_or(default_tex_set);
+                let norm_set = mr.normal_map.as_ref()
+                    .map(|t| t.descriptor_set)
+                    .unwrap_or(default_normal_set);
+                let orm_set = mr.orm_map.as_ref()
+                    .map(|t| t.descriptor_set)
+                    .unwrap_or(default_orm_set);
                 self.ctx.device.cmd_bind_descriptor_sets(
                     cmd,
                     vk::PipelineBindPoint::GRAPHICS,
                     self.pipeline.layout,
                     1,
-                    &[tex_set],
+                    &[tex_set, norm_set, default_env_set, orm_set],
                     &[],
                 );
 
                 let push = PushConstants {
                     model:      model.to_cols_array(),
                     base_color: mr.base_color,
+                    metallic:   mr.metallic,
+                    roughness:  mr.roughness,
+                    _pad:       [0.0; 2],
                 };
                 let push_bytes = std::slice::from_raw_parts(
                     &push as *const PushConstants as *const u8,
@@ -652,7 +630,8 @@ impl Renderer {
             if entity.has::<DirectionalLight>() && entity.has::<Transform>() {
                 let tr  = entity.get::<Transform>();
                 let light_view = Mat4::look_at_rh(tr.position, Vec3::ZERO, Vec3::Y);
-                let light_proj = Mat4::orthographic_rh(-20.0, 20.0, -20.0, 20.0, 0.1, 100.0);
+                let mut light_proj = Mat4::orthographic_rh(-20.0, 20.0, -20.0, 20.0, 1.0, 80.0);
+                light_proj.y_axis.y *= -1.0;
                 return light_proj * light_view;
             }
         }
@@ -670,8 +649,14 @@ impl Renderer {
         self.framebuffers = create_framebuffers(&self.ctx, &self.swapchain, &self.pipeline);
     }
 
-    pub fn set_skybox(&mut self, _texture: ()) {
-        self._skybox = Some(());
+    pub fn set_skybox(&mut self, texture: Arc<GpuTexture>) {
+        let skybox_pipeline = SkyboxPipeline::new(&self.ctx, self.pipeline.render_pass);
+        self.skybox_pipeline = Some(skybox_pipeline);
+        self.env_map = Some(texture);
+    }
+
+    pub fn set_skybox_blur(&mut self, lod_bias: f32) {
+        self.skybox_blur = lod_bias;
     }
 
     pub fn create_cube(&self) -> std::sync::Arc<crate::mesh::Mesh> {
@@ -727,7 +712,6 @@ impl Drop for Renderer {
                 self.ctx.device.destroy_semaphore(frame.image_available, None);
                 self.ctx.device.destroy_fence(frame.in_flight, None);
                 frame.ubo_buffer.destroy(&self.ctx);
-                frame.ssbo_buffer.destroy(&self.ctx);
             }
             for &sem in &self.render_finished_per_image {
                 self.ctx.device.destroy_semaphore(sem, None);
@@ -750,8 +734,12 @@ impl Drop for Renderer {
             self.pipeline.destroy(&self.ctx.device);
             self.ctx.device.destroy_descriptor_pool(self.descriptor_pool, None);
 
-            // Drop default_texture first so its descriptor set is freed before pool
-            self.default_texture = None;
+            self.default_texture    = None;
+            self.default_normal_map = None;
+            self.env_map            = None;
+            if let Some(sp) = &self.skybox_pipeline {
+                sp.destroy(&self.ctx.device);
+            }
             self.ctx.device.destroy_descriptor_pool(self.tex_descriptor_pool, None);
 
             self.ctx.device.destroy_command_pool(self.command_pool, None);
@@ -870,7 +858,6 @@ fn create_descriptor_pool(ctx: &VulkanContext, count: u32) -> vk::DescriptorPool
     let pool_sizes = [
         vk::DescriptorPoolSize { ty: vk::DescriptorType::UNIFORM_BUFFER,         descriptor_count: count },
         vk::DescriptorPoolSize { ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER, descriptor_count: count },
-        vk::DescriptorPoolSize { ty: vk::DescriptorType::STORAGE_BUFFER,         descriptor_count: count },
     ];
     let create_info = vk::DescriptorPoolCreateInfo::default()
         .pool_sizes(&pool_sizes)

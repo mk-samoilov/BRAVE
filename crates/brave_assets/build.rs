@@ -1,9 +1,9 @@
 //! Build-time asset pipeline (runs only in release builds).
 //!
 //! Produces three archives next to the binary:
-//!   models.ast   — all GLTF primitives (multi-prim binary format "BRMM")
-//!   textures.ast — filesystem textures + embedded GLTF textures
-//!   shaders.ast  — compiled SPIR-V
+//!   models.ast   - all GLTF primitives (multi-prim binary format "BRMM")
+//!   textures.ast - filesystem textures + embedded GLTF textures
+//!   shaders.ast  - compiled SPIR-V
 //!
 //! This mirrors Unity's build step: source assets in assets/, baked output
 //! packed alongside the executable.

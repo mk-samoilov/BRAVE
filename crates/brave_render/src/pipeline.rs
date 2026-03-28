@@ -3,22 +3,16 @@ use ash::vk;
 use crate::context::VulkanContext;
 use crate::mesh::Vertex;
 
-const VERT_SPV:        &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/mesh.vert.glsl.spv"));
-const FRAG_SPV:        &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/mesh.frag.glsl.spv"));
-const SHADOW_VERT_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/shadow.vert.glsl.spv"));
+const VERT_SPV:          &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/mesh.vert.glsl.spv"));
+const FRAG_SPV:          &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/mesh.frag.glsl.spv"));
+const SHADOW_VERT_SPV:   &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/shadow.vert.glsl.spv"));
+const SKYBOX_VERT_SPV:   &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/skybox.vert.glsl.spv"));
+const SKYBOX_FRAG_SPV:   &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/skybox.frag.glsl.spv"));
 
 pub const MAX_POINT_LIGHTS: usize = 8;
 pub const MAX_SPOT_LIGHTS:  usize = 4;
 pub const SHADOW_MAP_SIZE:  u32   = 2048;
-pub const MAX_RT_OBJECTS:   usize = 64;
 pub const MSAA_SAMPLES: vk::SampleCountFlags = vk::SampleCountFlags::TYPE_8;
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct AabbEntry {
-    pub min_pt: [f32; 4],
-    pub max_pt: [f32; 4],
-}
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -41,14 +35,15 @@ pub struct FrameUbo {
     pub shadows_enabled: i32,
     pub _pad2: [i32; 3],
     pub cam_pos: [f32; 4],
-    pub rt_aabb_count: i32,
-    pub _pad3: [i32; 3],
 }
 
 #[repr(C)]
 pub struct PushConstants {
     pub model:      [f32; 16],
     pub base_color: [f32; 4],
+    pub metallic:   f32,
+    pub roughness:  f32,
+    pub _pad:       [f32; 2],
 }
 
 #[repr(C)]
@@ -131,11 +126,6 @@ impl Pipeline {
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .descriptor_count(1)
                 .stage_flags(vk::ShaderStageFlags::FRAGMENT),
-            vk::DescriptorSetLayoutBinding::default()
-                .binding(2)
-                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                .descriptor_count(1)
-                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
         ];
         let desc_set_layout = unsafe {
             ctx.device
@@ -168,7 +158,7 @@ impl Pipeline {
                 .unwrap()
         };
 
-        let set_layouts = [desc_set_layout, tex_desc_set_layout];
+        let set_layouts = [desc_set_layout, tex_desc_set_layout, tex_desc_set_layout, tex_desc_set_layout, tex_desc_set_layout];
         let layout = unsafe {
             ctx.device
                 .create_pipeline_layout(
@@ -253,11 +243,11 @@ impl ShadowPipeline {
         let rasterizer = vk::PipelineRasterizationStateCreateInfo::default()
             .polygon_mode(vk::PolygonMode::FILL)
             .line_width(1.0)
-            .cull_mode(vk::CullModeFlags::FRONT)
+            .cull_mode(vk::CullModeFlags::BACK)
             .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
             .depth_bias_enable(true)
-            .depth_bias_constant_factor(2.0)
-            .depth_bias_slope_factor(2.5);
+            .depth_bias_constant_factor(1.25)
+            .depth_bias_slope_factor(1.75);
 
         let multisampling = vk::PipelineMultisampleStateCreateInfo::default()
             .rasterization_samples(vk::SampleCountFlags::TYPE_1);
@@ -318,6 +308,130 @@ impl ShadowPipeline {
             device.destroy_pipeline(self.handle, None);
             device.destroy_pipeline_layout(self.layout, None);
             device.destroy_render_pass(self.render_pass, None);
+        }
+    }
+}
+
+pub struct SkyboxPipeline {
+    pub layout:              vk::PipelineLayout,
+    pub handle:              vk::Pipeline,
+    pub tex_desc_set_layout: vk::DescriptorSetLayout,
+}
+
+impl SkyboxPipeline {
+    pub fn new(ctx: &VulkanContext, render_pass: vk::RenderPass) -> Self {
+        let vert_module = create_shader_module(&ctx.device, SKYBOX_VERT_SPV);
+        let frag_module = create_shader_module(&ctx.device, SKYBOX_FRAG_SPV);
+        let entry = std::ffi::CString::new("main").unwrap();
+
+        let shader_stages = [
+            vk::PipelineShaderStageCreateInfo::default()
+                .stage(vk::ShaderStageFlags::VERTEX)
+                .module(vert_module)
+                .name(&entry),
+            vk::PipelineShaderStageCreateInfo::default()
+                .stage(vk::ShaderStageFlags::FRAGMENT)
+                .module(frag_module)
+                .name(&entry),
+        ];
+
+        let vertex_input = vk::PipelineVertexInputStateCreateInfo::default();
+
+        let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
+            .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
+
+        let viewport_state = vk::PipelineViewportStateCreateInfo::default()
+            .viewport_count(1)
+            .scissor_count(1);
+
+        let rasterizer = vk::PipelineRasterizationStateCreateInfo::default()
+            .polygon_mode(vk::PolygonMode::FILL)
+            .line_width(1.0)
+            .cull_mode(vk::CullModeFlags::NONE)
+            .front_face(vk::FrontFace::COUNTER_CLOCKWISE);
+
+        let multisampling = vk::PipelineMultisampleStateCreateInfo::default()
+            .rasterization_samples(MSAA_SAMPLES);
+
+        let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
+            .depth_test_enable(false)
+            .depth_write_enable(false);
+
+        let blend_attachment = vk::PipelineColorBlendAttachmentState::default()
+            .color_write_mask(vk::ColorComponentFlags::RGBA);
+        let color_blending = vk::PipelineColorBlendStateCreateInfo::default()
+            .attachments(std::slice::from_ref(&blend_attachment));
+
+        let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
+        let dynamic_state  = vk::PipelineDynamicStateCreateInfo::default()
+            .dynamic_states(&dynamic_states);
+
+        let tex_binding = vk::DescriptorSetLayoutBinding::default()
+            .binding(0)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::FRAGMENT);
+        let tex_desc_set_layout = unsafe {
+            ctx.device
+                .create_descriptor_set_layout(
+                    &vk::DescriptorSetLayoutCreateInfo::default()
+                        .bindings(std::slice::from_ref(&tex_binding)),
+                    None,
+                )
+                .unwrap()
+        };
+
+        let push_range = vk::PushConstantRange {
+            stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+            offset: 0,
+            size: 68,
+        };
+
+        let set_layouts = [tex_desc_set_layout];
+        let layout = unsafe {
+            ctx.device
+                .create_pipeline_layout(
+                    &vk::PipelineLayoutCreateInfo::default()
+                        .set_layouts(&set_layouts)
+                        .push_constant_ranges(std::slice::from_ref(&push_range)),
+                    None,
+                )
+                .unwrap()
+        };
+
+        let pipeline_info = vk::GraphicsPipelineCreateInfo::default()
+            .stages(&shader_stages)
+            .vertex_input_state(&vertex_input)
+            .input_assembly_state(&input_assembly)
+            .viewport_state(&viewport_state)
+            .rasterization_state(&rasterizer)
+            .multisample_state(&multisampling)
+            .depth_stencil_state(&depth_stencil)
+            .color_blend_state(&color_blending)
+            .dynamic_state(&dynamic_state)
+            .layout(layout)
+            .render_pass(render_pass)
+            .subpass(0);
+
+        let handle = unsafe {
+            ctx.device
+                .create_graphics_pipelines(vk::PipelineCache::null(), &[pipeline_info], None)
+                .expect("Failed to create skybox pipeline")[0]
+        };
+
+        unsafe {
+            ctx.device.destroy_shader_module(vert_module, None);
+            ctx.device.destroy_shader_module(frag_module, None);
+        }
+
+        Self { layout, handle, tex_desc_set_layout }
+    }
+
+    pub fn destroy(&self, device: &ash::Device) {
+        unsafe {
+            device.destroy_pipeline(self.handle, None);
+            device.destroy_pipeline_layout(self.layout, None);
+            device.destroy_descriptor_set_layout(self.tex_desc_set_layout, None);
         }
     }
 }

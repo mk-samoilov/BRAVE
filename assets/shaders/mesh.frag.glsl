@@ -8,237 +8,306 @@ layout(location = 3) in vec4 frag_light_space_pos;
 layout(set = 0, binding = 0) uniform FrameUbo {
     mat4 view;
     mat4 proj;
-
     vec4 dir_light_dir;
     vec4 dir_light_color;
     vec4 ambient;
-
     vec4 point_pos_range[8];
     vec4 point_color_intensity[8];
     int  point_count;
     int  _pad0; int _pad1; int _pad2;
-
     vec4 spot_pos_range[4];
     vec4 spot_color_intensity[4];
     vec4 spot_dir_angle[4];
     int  spot_count;
     int  _pad3; int _pad4; int _pad5;
-
     mat4 light_space_matrix;
     int  shadows_enabled;
     int  _pad6; int _pad7; int _pad8;
-
     vec4 cam_pos;
-    int  rt_aabb_count;
-    int  _pad9; int _pad10; int _pad11;
 } frame;
 
 layout(set = 0, binding = 1) uniform sampler2D shadow_map;
 
-struct AabbEntry {
-    vec4 min_pt;
-    vec4 max_pt;
-};
-layout(std430, set = 0, binding = 2) readonly buffer SceneAabbs {
-    AabbEntry aabbs[];
-} scene;
-
 layout(set = 1, binding = 0) uniform sampler2D albedo_tex;
+layout(set = 2, binding = 0) uniform sampler2D normal_map;
+layout(set = 3, binding = 0) uniform sampler2D env_map;
+layout(set = 4, binding = 0) uniform sampler2D orm_map;
 
 layout(push_constant) uniform PushConst {
-    mat4 model;
-    vec4 base_color;
+    mat4  model;
+    vec4  base_color;
+    float metallic;
+    float roughness;
+    vec2  _pad;
 } push;
 
 layout(location = 0) out vec4 out_color;
 
-// https://iquilezles.org/articles/boxfunctions/
+#define M_PI 3.141592653589793
 
-const float SHADOW_BIAS     = 0.03;
-const float SHADOW_SOFTNESS = 8.0;
+// ─── PBR ─────────────────────────────────────────────────────────────────────
 
-float length2(vec3 v) { return dot(v, v); }
+vec3 F_Schlick(vec3 f0, float VdotH) {
+    float x  = clamp(1.0 - VdotH, 0.0, 1.0);
+    float x2 = x * x;
+    float x5 = x * x2 * x2;
+    return f0 + (1.0 - f0) * x5;
+}
 
-float segShadow(vec3 ro, vec3 rd, vec3 pa, float sh) {
-    float k1 = 1.0 - rd.x * rd.x;
-    float k4 = (ro.x - pa.x) * k1;
-    float k6 = (ro.x + pa.x) * k1;
-    vec2  k5 = ro.yz * k1;
-    vec2  k7 = pa.yz * k1;
-    float k2 = -dot(ro.yz, rd.yz);
-    vec2  k3 = pa.yz * rd.yz;
-    for (int i = 0; i < 4; i++) {
-        vec2  ss  = vec2(float(i & 1), float(i >> 1)) * 2.0 - 1.0;
-        float thx = k2 + dot(ss, k3);
-        if (thx < 0.0) continue;
-        float thy = clamp(-rd.x * thx, k4, k6);
-        sh = min(sh, length2(vec3(thy, k5 - k7 * ss) + rd * thx) / (thx * thx));
+float V_GGX(float NdotL, float NdotV, float alphaRoughness) {
+    float a2   = alphaRoughness * alphaRoughness;
+    float GGXV = NdotL * sqrt(NdotV * NdotV * (1.0 - a2) + a2);
+    float GGXL = NdotV * sqrt(NdotL * NdotL * (1.0 - a2) + a2);
+    float GGX  = GGXV + GGXL;
+    return (GGX > 0.0) ? 0.5 / GGX : 0.0;
+}
+
+float D_GGX(float NdotH, float alphaRoughness) {
+    float a2 = alphaRoughness * alphaRoughness;
+    float f  = (NdotH * NdotH) * (a2 - 1.0) + 1.0;
+    return a2 / (M_PI * f * f);
+}
+
+float getRangeAttenuation(float range, float distance) {
+    if (range <= 0.0) return 1.0 / (distance * distance);
+    return max(min(1.0 - pow(distance / range, 4.0), 1.0), 0.0) / (distance * distance);
+}
+
+// ─── Normal mapping ───────────────────────────────────────────────────────────
+
+mat3 cotangent_frame(vec3 N, vec3 pos, vec2 uv) {
+    vec3 dp1  = dFdx(pos);
+    vec3 dp2  = dFdy(pos);
+    vec2 duv1 = dFdx(uv);
+    vec2 duv2 = dFdy(uv);
+    vec3 dp2perp = cross(dp2, N);
+    vec3 dp1perp = cross(N, dp1);
+    vec3 T = dp2perp * duv1.x + dp1perp * duv2.x;
+    vec3 B = dp2perp * duv1.y + dp1perp * duv2.y;
+    float denom = max(dot(T, T), dot(B, B));
+    if (denom < 1e-6) {
+        vec3 up = abs(N.y) < 0.999 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+        T = normalize(cross(up, N));
+        B = cross(N, T);
+    } else {
+        float inv = inversesqrt(denom);
+        T *= inv;
+        B *= inv;
     }
-    return sh;
+    return mat3(T, B, N);
 }
 
-float boxSoftShadow(vec3 row, vec3 rdw, vec3 bmin, vec3 bmax, float sk) {
-    vec3 center = (bmin + bmax) * 0.5;
-    vec3 rad    = (bmax - bmin) * 0.5;
-    vec3 ro = row - center;
-    vec3 rd = rdw;
-
-    vec3  m  = 1.0 / rd;
-    vec3  n  = m * ro;
-    vec3  k  = abs(m) * rad;
-    vec3  t1 = -n - k;
-    vec3  t2 = -n + k;
-    float tN = max(max(t1.x, t1.y), t1.z);
-    float tF = min(min(t2.x, t2.y), t2.z);
-
-    if (tN > tF || tF < 0.0) {
-        float sh = 1.0;
-        sh = segShadow(ro.xyz, rd.xyz, rad.xyz, sh);
-        sh = segShadow(ro.yzx, rd.yzx, rad.yzx, sh);
-        sh = segShadow(ro.zxy, rd.zxy, rad.zxy, sh);
-        sh = clamp(sk * sqrt(sh), 0.0, 1.0);
-        return sh * sh * (3.0 - 2.0 * sh);
-    }
-    return 0.0;
+vec3 perturb_normal(vec3 N) {
+    vec3 map    = texture(normal_map, frag_uv).rgb * 2.0 - 1.0;
+    vec3 result = cotangent_frame(N, frag_world_pos, frag_uv) * map;
+    float len   = dot(result, result);
+    result = (len > 1e-6) ? result * inversesqrt(len) : N;
+    return (dot(result, N) < 0.0) ? reflect(result, N) : result;
 }
 
-float calc_rt_shadow(vec3 world_pos, vec3 normal) {
-    if (frame.rt_aabb_count == 0) return 0.0;
+// ─── Shadows: Vogel disk PCSS ─────────────────────────────────────────────────
+// Based on: Vlachos "Shadow Techniques from Left 4 Dead 2" (GDC 2010) and
+//           Simon Claesson's Vogel disk sampling (2013).
+// More uniform distribution than rotated Poisson → less banding.
 
-    vec3 sun_dir    = normalize(frame.dir_light_dir.xyz);
-    vec3 ray_origin = world_pos + normal * SHADOW_BIAS;
-
-    float light = 1.0;
-    for (int i = 0; i < frame.rt_aabb_count; i++) {
-        float s = boxSoftShadow(ray_origin, sun_dir,
-                                scene.aabbs[i].min_pt.xyz,
-                                scene.aabbs[i].max_pt.xyz,
-                                SHADOW_SOFTNESS);
-        light = min(light, s);
-    }
-    return 1.0 - light;
+// Interleaved gradient noise — screen-space rotation to break up patterns
+// Source: Jimenez "Filmic SMAA" (2016)
+float ign(vec2 pos) {
+    return fract(52.9829189 * fract(dot(pos, vec2(0.06711056, 0.00583715))));
 }
 
-// ─── Shadow-map PCF fallback ──────────────────────────────────────────────────
-
-float rand(vec2 co) {
-    return fract(sin(dot(co, vec2(12.9898, 78.233))) * 43758.5453);
+vec2 vogel_disk(int index, int count, float phi) {
+    const float GOLDEN_ANGLE = 2.3999632; // 2*PI*(1 - 1/phi_golden)
+    float r     = sqrt(float(index) + 0.5) / sqrt(float(count));
+    float theta = float(index) * GOLDEN_ANGLE + phi;
+    return r * vec2(cos(theta), sin(theta));
 }
 
-const vec2 POISSON[16] = vec2[](
-    vec2(-0.94201624, -0.39906216), vec2( 0.94558609, -0.76890725),
-    vec2(-0.09418410, -0.92938870), vec2( 0.34495938,  0.29387760),
-    vec2(-0.91588581,  0.45771432), vec2(-0.81544232, -0.87912464),
-    vec2(-0.38277543,  0.27676845), vec2( 0.97484398,  0.75648379),
-    vec2( 0.44323325, -0.97511554), vec2( 0.53742981, -0.47373420),
-    vec2(-0.26496911, -0.41893023), vec2( 0.79197514,  0.19090188),
-    vec2(-0.24188840,  0.99706507), vec2(-0.81409955,  0.91437590),
-    vec2( 0.19984126,  0.78641367), vec2( 0.14383161, -0.14100790)
-);
-
-float calc_shadow_map(vec4 light_space_pos, vec3 normal, vec3 light_dir) {
-    if (frame.shadows_enabled == 0) return 0.0;
-    vec3 proj = light_space_pos.xyz / light_space_pos.w;
-    proj.xy = proj.xy * 0.5 + 0.5;
-    if (proj.z > 1.0 || clamp(proj.xy, 0.0, 1.0) != proj.xy) return 0.0;
-
-    float cos_theta = clamp(dot(normal, light_dir), 0.0, 1.0);
-    float bias = clamp(0.0015 * tan(acos(cos_theta)), 0.0005, 0.006);
-
-    float spread = 2800.0 / float(textureSize(shadow_map, 0).x);
-    float angle  = rand(proj.xy) * 6.2832;
-    float ca = cos(angle), sa = sin(angle);
-
-    float shadow = 0.0;
+float find_blocker(vec2 uv, float z_recv, float search_r, float phi) {
+    float total = 0.0;
+    int   count = 0;
     for (int i = 0; i < 16; i++) {
-        vec2 offset = vec2(ca * POISSON[i].x - sa * POISSON[i].y,
-                           sa * POISSON[i].x + ca * POISSON[i].y)
-                    * spread / vec2(textureSize(shadow_map, 0));
-        float d = texture(shadow_map, proj.xy + offset).r;
-        shadow += (proj.z - bias > d) ? 1.0 : 0.0;
+        vec2  s = vogel_disk(i, 16, phi) * search_r;
+        float d = texture(shadow_map, uv + s).r;
+        if (d < z_recv) { total += d; count++; }
     }
-    return shadow / 16.0;
+    return count > 0 ? total / float(count) : -1.0;
 }
 
-// ─── Attenuation ─────────────────────────────────────────────────────────────
-
-float attenuate(float dist, float range) {
-    if (dist >= range) return 0.0;
-    float x = dist / range;
-    return clamp(1.0 - x * x * x * x, 0.0, 1.0) / (dist * dist + 1.0);
+float pcf_vogel(vec2 uv, float z_recv, float bias, float radius, float phi) {
+    float shadow = 0.0;
+    for (int i = 0; i < 32; i++) {
+        vec2  s = vogel_disk(i, 32, phi) * radius;
+        float d = texture(shadow_map, uv + s).r;
+        shadow += (z_recv - bias > d) ? 1.0 : 0.0;
+    }
+    return shadow / 32.0;
 }
 
-// ─── Main ─────────────────────────────────────────────────────────────────────
+float calc_shadow(vec4 lsp, vec3 N, vec3 L) {
+    if (frame.shadows_enabled == 0) return 0.0;
+
+    vec3 proj = lsp.xyz / lsp.w;
+    proj.xy   = proj.xy * 0.5 + 0.5;
+
+    // Reject fragments outside the shadow frustum
+    if (proj.z < 0.0 || proj.z > 1.0) return 0.0;
+    if (any(lessThan(proj.xy, vec2(0.0))) || any(greaterThan(proj.xy, vec2(1.0)))) return 0.0;
+
+    float cos_t = clamp(dot(N, L), 0.0, 1.0);
+    // Bias scaled to depth range [near=1, far=80] → 1/79 ≈ 0.013 per world unit.
+    // UE4-style slope bias: larger for grazing surfaces, clamped to avoid swallowing close shadows.
+    float bias = clamp(0.005 * tan(acos(cos_t)), 0.001, 0.006);
+
+    float phi = ign(gl_FragCoord.xy) * 6.2832;
+
+    float d_blocker = find_blocker(proj.xy, proj.z, 0.02, phi);
+    if (d_blocker < 0.0) return 0.0;
+
+    float penumbra = clamp((proj.z - d_blocker) * 80.0, 0.003, 0.05);
+    return pcf_vogel(proj.xy, proj.z, bias, penumbra, phi);
+}
+
+// ─── IBL: split-sum approximation ────────────────────────────────────────────
+// Based on: Karis "Real Shading in Unreal Engine 4" (SIGGRAPH 2013).
+// Diffuse = highest-mip sample (≈ irradiance), specular = roughness-LOD sample.
+
+vec3 EnvBRDFApprox(vec3 F0, float roughness, float NdotV) {
+    const vec4 c0 = vec4(-1.0, -0.0275, -0.572,  0.022);
+    const vec4 c1 = vec4( 1.0,  0.0425,  1.04,  -0.04 );
+    vec4 r  = roughness * c0 + c1;
+    float a = min(r.x * r.x, exp2(-9.28 * NdotV)) * r.x + r.y;
+    vec2 AB = vec2(-1.04, 1.04) * a + r.zw;
+    return clamp(F0 * AB.x + AB.y, 0.0, 1.0);
+}
+
+vec2 equirect_uv(vec3 d) {
+    float phi   = atan(d.z, d.x);
+    float theta = asin(clamp(-d.y, -1.0, 1.0));
+    return vec2(0.5 + phi / (2.0 * M_PI), 0.5 - theta / M_PI);
+}
+
+vec3 ACESFilm(vec3 x) {
+    return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
+}
 
 void main() {
-    vec3 normal     = normalize(frag_normal);
-    vec3 view_dir   = normalize(frame.cam_pos.xyz - frag_world_pos);
-    vec3 base_color = texture(albedo_tex, frag_uv).rgb * push.base_color.rgb;
-    vec3 result     = vec3(0.0);
+    vec3 N_geom = normalize(frag_normal);
+    vec3 V      = normalize(frame.cam_pos.xyz - frag_world_pos);
+    vec3 N      = perturb_normal(N_geom);
 
-    // Hemisphere ambient
-    vec3 sky_col    = vec3(0.18, 0.26, 0.42);
-    vec3 ground_col = vec3(0.16, 0.14, 0.10);
-    result += mix(ground_col, sky_col, normal.y * 0.5 + 0.5) * base_color;
+    vec3  albedo    = texture(albedo_tex, frag_uv).rgb * push.base_color.rgb;
+    vec3  orm       = texture(orm_map, frag_uv).rgb;
+    float metallic  = push.metallic * orm.b;
+    float roughness = clamp(push.roughness * orm.g, 0.04, 1.0);
+    float alpha     = roughness * roughness;
 
-    // Configurable ambient
-    result += frame.ambient.xyz * frame.ambient.w * base_color;
+    vec3 F0    = mix(vec3(0.04), albedo, metallic);
+    float NdotV = clamp(dot(N, V), 0.001, 1.0);
+
+    vec3  Lo     = vec3(0.0);
+    float shadow = 0.0;
 
     // Directional light
     {
-        vec3  dir       = normalize(frame.dir_light_dir.xyz);
+        vec3  L         = normalize(frame.dir_light_dir.xyz);
         float intensity = frame.dir_light_dir.w;
-        float diff      = max(dot(normal, dir), 0.0);
-        vec3  half_vec  = normalize(dir + view_dir);
-        float spec      = pow(max(dot(normal, half_vec), 0.0), 32.0) * 0.3;
+        vec3  radiance  = frame.dir_light_color.xyz * intensity;
 
-        float shadow = (frame.rt_aabb_count > 0)
-            ? calc_rt_shadow(frag_world_pos, normal)
-            : calc_shadow_map(frag_light_space_pos, normal, dir);
+        shadow = calc_shadow(frag_light_space_pos, N_geom, L);
 
-        result += (1.0 - shadow) * intensity * frame.dir_light_color.xyz
-                * (diff * base_color + spec);
+        float NdotL = clamp(dot(N, L), 0.001, 1.0);
+        vec3  H     = normalize(V + L);
+        float NdotH = clamp(dot(N, H), 0.0, 1.0);
+        float VdotH = clamp(dot(V, H), 0.0, 1.0);
+
+        vec3  F        = F_Schlick(F0, VdotH);
+        float specular = V_GGX(NdotL, NdotV, alpha) * D_GGX(NdotH, alpha);
+        vec3  diffuse  = (1.0 - F) * (1.0 - metallic) * albedo / M_PI;
+
+        Lo += (1.0 - shadow) * (diffuse + F * specular) * radiance * NdotL;
     }
 
     // Point lights
     for (int i = 0; i < frame.point_count; i++) {
-        vec3  pos       = frame.point_pos_range[i].xyz;
-        float range     = frame.point_pos_range[i].w;
-        vec3  color     = frame.point_color_intensity[i].xyz;
-        float intensity = frame.point_color_intensity[i].w;
-        vec3  to_light  = pos - frag_world_pos;
-        float dist      = length(to_light);
-        vec3  l         = normalize(to_light);
-        float atten     = attenuate(dist, range);
-        float diff      = max(dot(normal, l), 0.0);
-        vec3  half_vec  = normalize(l + view_dir);
-        float spec      = pow(max(dot(normal, half_vec), 0.0), 32.0) * 0.3;
-        result += intensity * atten * color * (diff * base_color + spec);
+        vec3  lpos       = frame.point_pos_range[i].xyz;
+        float lrange     = frame.point_pos_range[i].w;
+        vec3  lcolor     = frame.point_color_intensity[i].xyz;
+        float lintensity = frame.point_color_intensity[i].w;
+
+        vec3  to_light = lpos - frag_world_pos;
+        float dist     = length(to_light);
+        vec3  L        = normalize(to_light);
+        float atten    = getRangeAttenuation(lrange, dist);
+        vec3  radiance = lcolor * lintensity * atten;
+
+        float NdotL = clamp(dot(N, L), 0.001, 1.0);
+        vec3  H     = normalize(V + L);
+        float NdotH = clamp(dot(N, H), 0.0, 1.0);
+        float VdotH = clamp(dot(V, H), 0.0, 1.0);
+
+        vec3  F        = F_Schlick(F0, VdotH);
+        float specular = V_GGX(NdotL, NdotV, alpha) * D_GGX(NdotH, alpha);
+        vec3  diffuse  = (1.0 - F) * (1.0 - metallic) * albedo / M_PI;
+
+        Lo += (diffuse + F * specular) * radiance * NdotL;
     }
 
     // Spot lights
     for (int i = 0; i < frame.spot_count; i++) {
-        vec3  pos       = frame.spot_pos_range[i].xyz;
-        float range     = frame.spot_pos_range[i].w;
-        vec3  color     = frame.spot_color_intensity[i].xyz;
-        float intensity = frame.spot_color_intensity[i].w;
-        vec3  dir       = normalize(frame.spot_dir_angle[i].xyz);
-        float cos_angle = frame.spot_dir_angle[i].w;
-        vec3  to_light  = pos - frag_world_pos;
-        float dist      = length(to_light);
-        vec3  l         = normalize(to_light);
-        float theta     = dot(l, -dir);
-        if (theta < cos_angle) continue;
-        float atten     = attenuate(dist, range);
-        float diff      = max(dot(normal, l), 0.0);
-        vec3  half_vec  = normalize(l + view_dir);
-        float spec      = pow(max(dot(normal, half_vec), 0.0), 32.0) * 0.3;
-        result += intensity * atten * color * (diff * base_color + spec);
+        vec3  spos       = frame.spot_pos_range[i].xyz;
+        float srange     = frame.spot_pos_range[i].w;
+        vec3  scolor     = frame.spot_color_intensity[i].xyz;
+        float sintensity = frame.spot_color_intensity[i].w;
+        vec3  sdir       = normalize(frame.spot_dir_angle[i].xyz);
+        float cos_angle  = frame.spot_dir_angle[i].w;
+
+        vec3  to_light = spos - frag_world_pos;
+        float dist     = length(to_light);
+        vec3  L        = normalize(to_light);
+        if (dot(L, -sdir) < cos_angle) continue;
+
+        float atten    = getRangeAttenuation(srange, dist);
+        vec3  radiance = scolor * sintensity * atten;
+
+        float NdotL = clamp(dot(N, L), 0.001, 1.0);
+        vec3  H     = normalize(V + L);
+        float NdotH = clamp(dot(N, H), 0.0, 1.0);
+        float VdotH = clamp(dot(V, H), 0.0, 1.0);
+
+        vec3  F        = F_Schlick(F0, VdotH);
+        float specular = V_GGX(NdotL, NdotV, alpha) * D_GGX(NdotH, alpha);
+        vec3  diffuse  = (1.0 - F) * (1.0 - metallic) * albedo / M_PI;
+
+        Lo += (diffuse + F * specular) * radiance * NdotL;
     }
 
-    // Reinhard tone mapping
-    result = result / (result + vec3(1.0));
-    // Gamma correction
+    // IBL: split-sum (Karis "Real Shading in UE4", SIGGRAPH 2013)
+    // UE4 rule: diffuse sky light is ambient — unaffected by shadow maps.
+    // Specular (reflection capture) is attenuated in shadow proportional to roughness:
+    // rough materials (wood, stone) lose most specular in shadow;
+    // smooth metals keep more because their reflections come from all directions.
+    vec3  R       = reflect(-V, N);
+    float max_lod = float(textureQueryLevels(env_map) - 1);
+
+    vec3 env_diffuse  = textureLod(env_map, equirect_uv(N), max_lod).rgb;
+    vec3 env_specular = textureLod(env_map, equirect_uv(R), roughness * max_lod).rgb;
+
+    vec3  F_amb     = F_Schlick(F0, NdotV);
+    vec3  kD_amb    = (1.0 - F_amb) * (1.0 - metallic);
+    vec3  spec_brdf = EnvBRDFApprox(F0, roughness, NdotV);
+
+    vec3  configurable_amb = frame.ambient.xyz * frame.ambient.w;
+
+    // Specular occlusion in shadow: attenuate based on roughness^2 so rough surfaces
+    // (wood ~0.7-0.9 roughness) lose ~60-80% specular in shadow, metals (~0.0-0.3) keep most.
+    float spec_occ = 1.0 - shadow * (roughness * roughness);
+
+    vec3 ambient = kD_amb * albedo * (env_diffuse * 0.25 + configurable_amb)
+                 + spec_brdf * env_specular * spec_occ;
+
+    vec3 result = ambient + Lo;
+    result = ACESFilm(result);
     result = pow(result, vec3(1.0 / 2.2));
 
     out_color = vec4(result, 1.0);

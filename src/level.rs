@@ -2,6 +2,8 @@ use std::sync::Arc;
 
 use brave_core::prelude::*;
 
+use crate::utils::place_gltf_actor;
+
 pub fn setup_level(game: &mut Engine) {
     let cube_mesh = shapes::cube(game.render().ctx(), game.render().command_pool(), 8);
     let sphere_mesh = shapes::sphere(game.render().ctx(), game.render().command_pool(), 64);
@@ -22,14 +24,13 @@ pub fn setup_level(game: &mut Engine) {
         .with(Transform::new(2.21, 0.123, 4.12))
         .with(MeshRenderer::new(cube_mesh));
 
-    let chair = game.assets_mut().load_gltf("classic_chair/scene.gltf");
-    for (i, prim) in chair.primitives.iter().enumerate() {
-        game.world.spawn(&format!("chair_{}", i))
-            .with(Transform { scale: Vec3::splat(2.0), ..Transform::new(0.0, 0.0, 0.0) })
-            .with(MeshRenderer {
-                mesh:       Arc::clone(&prim.mesh),
-                texture:    prim.texture.clone(),
-                base_color: prim.base_color,
-            });
-    }
+    place_gltf_actor(game, "classic_chair", 1.0, 0.0, 1.6, 2.2);
+
+    place_gltf_actor(game, "classic_table", 2.2, 2.0, 2.5, 0.0335);
+    place_gltf_actor(game, "coffee_cup", 1.12, 2.1695, 3.41, 2.9);
+
+    place_gltf_actor(game, "stand_mirror", 0.9, 1.94, 6.5, 0.432);
+
+    place_gltf_actor(game, "beretta_92fs", 1.12, 3.2, 3.6, 0.001);
+    place_gltf_actor(game, "glock_17", 1.12, 3.2, 3.5, 1.0)
 }

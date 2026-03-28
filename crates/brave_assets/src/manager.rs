@@ -21,8 +21,11 @@ use crate::shader_loader;
 pub struct LoadedPrimitive {
     pub mesh:       Arc<Mesh>,
     pub base_color: [f32; 4],
-    /// Albedo texture, if the material had one.
+    pub metallic:   f32,
+    pub roughness:  f32,
     pub texture:    Option<Arc<GpuTexture>>,
+    pub normal_map: Option<Arc<GpuTexture>>,
+    pub orm_map:    Option<Arc<GpuTexture>>,
 }
 
 /// All primitives extracted from a single GLTF file.
@@ -85,7 +88,7 @@ impl AssetManager {
     pub fn new(assets_path: impl Into<PathBuf>) -> Self {
         let _root = assets_path.into();
         #[cfg(not(debug_assertions))]
-        log::info!("AssetManager: release mode — loading from .ast archives");
+        log::info!("AssetManager: release mode - loading from .ast archives");
         Self {
             #[cfg(debug_assertions)]
             root: _root,
@@ -138,32 +141,54 @@ impl AssetManager {
             };
             let ctx = unsafe { &*ctx_ptr };
 
-            // ONE command buffer for all uploads — one queue_wait_idle for the whole model.
+            // ONE command buffer for all uploads - one queue_wait_idle for the whole model.
             let mut batch = brave_render::UploadBatch::new(ctx, command_pool);
 
-            // Upload albedo textures into batch (skip if already cached).
+            // Upload textures into batch (sRGB for albedo, UNORM for normal maps).
             for tex in &embedded {
                 if !self.texture_cache.contains_key(&tex.name) {
-                    let gpu_tex = brave_render::GpuTexture::from_rgba8_batched(
-                        ctx, &mut batch,
-                        tex_descriptor_pool, tex_desc_set_layout,
-                        tex.width, tex.height, &tex.pixels,
-                    );
+                    let gpu_tex = if tex.linear {
+                        brave_render::GpuTexture::from_rgba8_unorm_batched(
+                            ctx, &mut batch,
+                            tex_descriptor_pool, tex_desc_set_layout,
+                            tex.width, tex.height, &tex.pixels,
+                        )
+                    } else {
+                        brave_render::GpuTexture::from_rgba8_batched(
+                            ctx, &mut batch,
+                            tex_descriptor_pool, tex_desc_set_layout,
+                            tex.width, tex.height, &tex.pixels,
+                        )
+                    };
                     self.texture_cache.insert(tex.name.clone(), gpu_tex);
                 }
             }
 
-            // Upload all mesh primitives into batch.
-            let gpu_primitives: Vec<LoadedPrimitive> = primitives.into_iter().map(|p| {
-                let mesh = brave_render::Mesh::new_batched(ctx, &mut batch, &p.vertices, &p.indices);
-                let texture = p.material.albedo_tex_index.map(|i| {
+            let resolve_tex = |index: Option<usize>, kind: &str| -> Option<Arc<GpuTexture>> {
+                index.map(|i| {
                     let tex_name = format!("{}_tex_{}", name, i);
                     self.texture_cache.get(&tex_name).cloned().unwrap_or_else(|| {
-                        log::warn!("AssetManager: texture '{}' not in cache", tex_name);
+                        log::warn!("AssetManager: {} '{}' not in cache", kind, tex_name);
                         Arc::clone(self.texture_cache.values().next().unwrap())
                     })
-                });
-                LoadedPrimitive { mesh, base_color: p.material.base_color_factor, texture }
+                })
+            };
+
+            // Upload all mesh primitives into batch.
+            let gpu_primitives: Vec<LoadedPrimitive> = primitives.into_iter().map(|p| {
+                let mesh       = brave_render::Mesh::new_batched(ctx, &mut batch, &p.vertices, &p.indices);
+                let texture    = resolve_tex(p.material.albedo_tex_index, "albedo");
+                let normal_map = resolve_tex(p.material.normal_tex_index, "normal map");
+                let orm_map    = resolve_tex(p.material.orm_tex_index, "orm");
+                LoadedPrimitive {
+                    mesh,
+                    base_color: p.material.base_color_factor,
+                    metallic:   p.material.metallic_factor,
+                    roughness:  p.material.roughness_factor,
+                    texture,
+                    normal_map,
+                    orm_map,
+                }
             }).collect();
 
             // Single GPU submit + wait for the entire model.
@@ -184,7 +209,7 @@ impl AssetManager {
                 } else {
                     Some(self.load_gpu_texture(&tex_name))
                 };
-                LoadedPrimitive { mesh, base_color: color, texture }
+                LoadedPrimitive { mesh, base_color: color, metallic: 0.0, roughness: 0.5, texture, normal_map: None, orm_map: None }
             }).collect();
 
             LoadedModel { primitives: gpu_primitives }

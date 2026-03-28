@@ -97,7 +97,7 @@ impl Mesh {
         })
     }
 
-    /// Upload mesh into an `UploadBatch` — no GPU wait until `batch.flush()`.
+    /// Upload mesh into an `UploadBatch` - no GPU wait until `batch.flush()`.
     pub fn new_batched(
         ctx:     &VulkanContext,
         batch:   &mut UploadBatch,
@@ -175,20 +175,24 @@ impl Drop for Mesh {
 pub struct MeshRenderer {
     pub mesh:       Arc<Mesh>,
     pub texture:    Option<Arc<GpuTexture>>,
+    pub normal_map: Option<Arc<GpuTexture>>,
+    pub orm_map:    Option<Arc<GpuTexture>>,
     pub base_color: [f32; 4],
+    pub metallic:   f32,
+    pub roughness:  f32,
 }
 
 impl MeshRenderer {
     pub fn new(mesh: Arc<Mesh>) -> Self {
-        Self { mesh, texture: None, base_color: [1.0, 1.0, 1.0, 1.0] }
+        Self { mesh, texture: None, normal_map: None, orm_map: None, base_color: [1.0, 1.0, 1.0, 1.0], metallic: 0.0, roughness: 0.5 }
     }
 
     pub fn with_texture(mesh: Arc<Mesh>, texture: Arc<GpuTexture>) -> Self {
-        Self { mesh, texture: Some(texture), base_color: [1.0, 1.0, 1.0, 1.0] }
+        Self { mesh, texture: Some(texture), normal_map: None, orm_map: None, base_color: [1.0, 1.0, 1.0, 1.0], metallic: 0.0, roughness: 0.5 }
     }
 
     pub fn with_color(mesh: Arc<Mesh>, r: f32, g: f32, b: f32) -> Self {
-        Self { mesh, texture: None, base_color: [r, g, b, 1.0] }
+        Self { mesh, texture: None, normal_map: None, orm_map: None, base_color: [r, g, b, 1.0], metallic: 0.0, roughness: 0.5 }
     }
 }
 

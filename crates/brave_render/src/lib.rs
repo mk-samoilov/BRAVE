@@ -14,4 +14,5 @@ pub use context::VulkanContext;
 pub use light::{AmbientLight, DirectionalLight, PointLight, SpotLight};
 pub use mesh::{Mesh, MeshRenderer, Vertex};
 pub use renderer::Renderer;
+pub use pipeline::SkyboxPipeline;
 pub use texture::GpuTexture;

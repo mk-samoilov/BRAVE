@@ -19,7 +19,7 @@ pub fn cube(
 ) -> Arc<Mesh> {
     let divs = subdivisions.max(1) as usize;
 
-    // Each face defined by (normal, right, up) — all unit vectors.
+    // Each face defined by (normal, right, up) - all unit vectors.
     let faces: [([f32; 3], [f32; 3], [f32; 3]); 6] = [
         ([ 0.,  0.,  1.], [ 1.,  0.,  0.], [ 0.,  1.,  0.]), // +Z
         ([ 0.,  0., -1.], [-1.,  0.,  0.], [ 0.,  1.,  0.]), // -Z

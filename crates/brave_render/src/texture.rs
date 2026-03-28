@@ -31,7 +31,6 @@ impl GpuTexture {
         height:          u32,
         pixels:          &[u8],
     ) -> Arc<Self> {
-        assert_eq!(pixels.len(), (width * height * 4) as usize, "Expected RGBA8 pixels");
         let mut batch = UploadBatch::new(ctx, command_pool);
         let tex = Self::from_rgba8_batched(ctx, &mut batch, descriptor_pool, set_layout, width, height, pixels);
         batch.flush(ctx, ctx.graphics_queue);
@@ -49,8 +48,9 @@ impl GpuTexture {
         height:          u32,
         pixels:          &[u8],
     ) -> Arc<Self> {
-        let (image, memory, mip_levels) = batch.upload_image(ctx, width, height, pixels);
-        let view           = create_image_view(&ctx.device, image, mip_levels);
+        let format = vk::Format::R8G8B8A8_SRGB;
+        let (image, memory, mip_levels) = batch.upload_image(ctx, width, height, pixels, format);
+        let view           = create_image_view(&ctx.device, image, mip_levels, format);
         let sampler        = create_sampler(&ctx.device);
         let descriptor_set = alloc_descriptor_set(&ctx.device, descriptor_pool, set_layout, view, sampler);
         Arc::new(Self {
@@ -60,7 +60,29 @@ impl GpuTexture {
         })
     }
 
-    /// 1×1 white texture — used as fallback when no texture is assigned.
+    /// Upload a linear (non-sRGB) RGBA8 texture - for normal maps.
+    pub fn from_rgba8_unorm_batched(
+        ctx:             &VulkanContext,
+        batch:           &mut UploadBatch,
+        descriptor_pool: vk::DescriptorPool,
+        set_layout:      vk::DescriptorSetLayout,
+        width:           u32,
+        height:          u32,
+        pixels:          &[u8],
+    ) -> Arc<Self> {
+        let format = vk::Format::R8G8B8A8_UNORM;
+        let (image, memory, mip_levels) = batch.upload_image(ctx, width, height, pixels, format);
+        let view           = create_image_view(&ctx.device, image, mip_levels, format);
+        let sampler        = create_sampler(&ctx.device);
+        let descriptor_set = alloc_descriptor_set(&ctx.device, descriptor_pool, set_layout, view, sampler);
+        Arc::new(Self {
+            image, memory, view, sampler, descriptor_set,
+            device:          &ctx.device as *const ash::Device,
+            descriptor_pool,
+        })
+    }
+
+    /// 1×1 white texture - used as fallback when no albedo is assigned.
     pub fn white(
         ctx:             &VulkanContext,
         command_pool:    vk::CommandPool,
@@ -69,6 +91,20 @@ impl GpuTexture {
     ) -> Arc<Self> {
         let pixels = [255u8, 255, 255, 255];
         Self::from_rgba8(ctx, command_pool, descriptor_pool, set_layout, 1, 1, &pixels)
+    }
+
+    /// 1×1 flat normal map (128, 128, 255) - used as fallback when no normal map is assigned.
+    pub fn flat_normal(
+        ctx:             &VulkanContext,
+        command_pool:    vk::CommandPool,
+        descriptor_pool: vk::DescriptorPool,
+        set_layout:      vk::DescriptorSetLayout,
+    ) -> Arc<Self> {
+        let pixels = [128u8, 128, 255, 255];
+        let mut batch = UploadBatch::new(ctx, command_pool);
+        let tex = Self::from_rgba8_unorm_batched(ctx, &mut batch, descriptor_pool, set_layout, 1, 1, &pixels);
+        batch.flush(ctx, ctx.graphics_queue);
+        tex
     }
 }
 
@@ -87,11 +123,11 @@ impl Drop for GpuTexture {
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
-fn create_image_view(device: &ash::Device, image: vk::Image, mip_levels: u32) -> vk::ImageView {
+fn create_image_view(device: &ash::Device, image: vk::Image, mip_levels: u32, format: vk::Format) -> vk::ImageView {
     let info = vk::ImageViewCreateInfo::default()
         .image(image)
         .view_type(vk::ImageViewType::TYPE_2D)
-        .format(vk::Format::R8G8B8A8_SRGB)
+        .format(format)
         .subresource_range(vk::ImageSubresourceRange {
             aspect_mask:      vk::ImageAspectFlags::COLOR,
             base_mip_level:   0,

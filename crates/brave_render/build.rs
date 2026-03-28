@@ -6,6 +6,8 @@ fn main() {
         "../../assets/shaders/mesh.vert.glsl",
         "../../assets/shaders/mesh.frag.glsl",
         "../../assets/shaders/shadow.vert.glsl",
+        "../../assets/shaders/skybox.vert.glsl",
+        "../../assets/shaders/skybox.frag.glsl",
     ];
 
     let out_dir = std::env::var("OUT_DIR").unwrap();

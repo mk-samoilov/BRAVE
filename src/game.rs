@@ -11,8 +11,16 @@ pub fn setup(game: &mut Engine) {
         .with(Script::new(player_update));
 
     game.world.spawn("sun")
-        .with(Transform::new(4.9, 9.1, -6.2))
-        .with(DirectionalLight { color: Color::WHITE, intensity: 6.2, shadows: true });
+        .with(Transform::new(5.9, 9.4, -17.2))
+        .with(DirectionalLight { color: Color::WHITE, intensity: 5.2, shadows: true });
+
+    let skybox = game.assets_mut().load_gltf("rooftop_day_skybox/scene.gltf");
+    if let Some(prim) = skybox.primitives.first() {
+        if let Some(tex) = &prim.texture {
+            game.render_mut().set_skybox(std::sync::Arc::clone(tex));
+            game.render_mut().set_skybox_blur(1.0);
+        }
+    }
 
     setup_level(game);
 }

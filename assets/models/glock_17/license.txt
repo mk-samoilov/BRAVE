@@ -1,0 +1,11 @@
+Model Information:
+* title:	Glock 17 Stock Model
+* source:	https://sketchfab.com/3d-models/glock-17-stock-model-b84087b8e0784ea3bdc34833270d8488
+* author:	Yevhen Avramenko (https://sketchfab.com/naprimerjenya)
+
+Model License:
+* license type:	CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+* requirements:	Author must be credited. Commercial use is allowed.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "Glock 17 Stock Model" (https://sketchfab.com/3d-models/glock-17-stock-model-b84087b8e0784ea3bdc34833270d8488) by Yevhen Avramenko (https://sketchfab.com/naprimerjenya) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)

@@ -135,12 +135,14 @@ impl UploadBatch {
 
     /// Record an RGBA8 image upload + layout transitions + mipmap generation.
     /// Staging kept alive until `flush`.
+    /// `format` must be `R8G8B8A8_SRGB` for color textures or `R8G8B8A8_UNORM` for linear data (normal maps).
     pub fn upload_image(
         &mut self,
         ctx:    &VulkanContext,
         width:  u32,
         height: u32,
         pixels: &[u8],
+        format: vk::Format,
     ) -> (vk::Image, vk::DeviceMemory, u32) {
         let size = pixels.len() as vk::DeviceSize;
 
@@ -155,7 +157,7 @@ impl UploadBatch {
 
         let image_info = vk::ImageCreateInfo::default()
             .image_type(vk::ImageType::TYPE_2D)
-            .format(vk::Format::R8G8B8A8_SRGB)
+            .format(format)
             .extent(vk::Extent3D { width, height, depth: 1 })
             .mip_levels(mip_levels)
             .array_layers(1)
@@ -260,7 +262,7 @@ impl UploadBatch {
                 vk::ImageLayout::TRANSFER_DST_OPTIMAL, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
                 mip_levels - 1, 1);
         } else {
-            // Only 1 mip level — level 0 is in TRANSFER_SRC after the initial transition
+            // Only 1 mip level - level 0 is in TRANSFER_SRC after the initial transition
             record_image_barrier_mip(&ctx.device, self.cmd, image,
                 vk::ImageLayout::TRANSFER_SRC_OPTIMAL, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL, 0, 1);
         }

@@ -13,16 +13,22 @@ pub struct PrimitiveData {
 
 pub struct MaterialData {
     pub base_color_factor: [f32; 4],
+    pub metallic_factor:   f32,
+    pub roughness_factor:  f32,
     pub albedo_tex_index:  Option<usize>,
+    pub normal_tex_index:  Option<usize>,
+    pub orm_tex_index:     Option<usize>,
 }
 
-/// A texture extracted from a GLTF file (only albedo/base-color textures are loaded).
+/// A texture extracted from a GLTF file.
 pub struct EmbeddedTexture {
     pub name:   String,
     pub width:  u32,
     pub height: u32,
-    /// Always RGBA8, max 2048×2048.
+    /// Always RGBA8.
     pub pixels: Vec<u8>,
+    /// True for linear-space textures (normal maps). False for sRGB (albedo).
+    pub linear: bool,
 }
 
 
@@ -36,20 +42,35 @@ pub fn load(path: &Path, model_name: &str) -> (Vec<PrimitiveData>, Vec<EmbeddedT
     let buffers = gltf::import_buffers(&document, Some(base), blob)
         .unwrap_or_else(|e| panic!("Failed to import buffers '{}': {}", path.display(), e));
 
-    // Only load images that are used as base-color (albedo).
+    // Collect image indices used as albedo and normal maps.
     let albedo_indices: std::collections::HashSet<usize> = document
         .materials()
         .filter_map(|m| m.pbr_metallic_roughness().base_color_texture())
         .map(|t| t.texture().source().index())
         .collect();
+    let normal_indices: std::collections::HashSet<usize> = document
+        .materials()
+        .filter_map(|m| m.normal_texture())
+        .map(|t| t.texture().source().index())
+        .collect();
+    let orm_indices: std::collections::HashSet<usize> = document
+        .materials()
+        .filter_map(|m| m.pbr_metallic_roughness().metallic_roughness_texture())
+        .map(|t| t.texture().source().index())
+        .collect();
+    let needed_indices: std::collections::HashSet<usize> = albedo_indices
+        .union(&normal_indices).copied()
+        .chain(orm_indices.iter().copied())
+        .collect();
 
     let embedded: Vec<EmbeddedTexture> = document
         .images()
         .enumerate()
-        .filter(|(i, _)| albedo_indices.contains(i))
+        .filter(|(i, _)| needed_indices.contains(i))
         .map(|(i, img)| {
             let (width, height, pixels) = load_image(img.source(), base, &buffers);
-            EmbeddedTexture { name: format!("{}_tex_{}", model_name, i), width, height, pixels }
+            let linear = normal_indices.contains(&i) || orm_indices.contains(&i);
+            EmbeddedTexture { name: format!("{}_tex_{}", model_name, i), width, height, pixels, linear }
         })
         .collect();
 
@@ -124,7 +145,13 @@ pub fn load(path: &Path, model_name: &str) -> (Vec<PrimitiveData>, Vec<EmbeddedT
             let mat       = prim.material();
             let pbr       = mat.pbr_metallic_roughness();
             let factor    = pbr.base_color_factor();
+            let metallic  = pbr.metallic_factor();
+            let roughness = pbr.roughness_factor();
             let tex_index = pbr.base_color_texture()
+                .map(|info| info.texture().source().index());
+            let normal_index = mat.normal_texture()
+                .map(|info| info.texture().source().index());
+            let orm_index = pbr.metallic_roughness_texture()
                 .map(|info| info.texture().source().index());
 
             let name = format!("{}__{}_{}", model_name, mesh.name().unwrap_or("mesh"), prim_idx);
@@ -132,7 +159,14 @@ pub fn load(path: &Path, model_name: &str) -> (Vec<PrimitiveData>, Vec<EmbeddedT
                 name,
                 vertices,
                 indices,
-                material: MaterialData { base_color_factor: factor, albedo_tex_index: tex_index },
+                material: MaterialData {
+                    base_color_factor: factor,
+                    metallic_factor:   metallic,
+                    roughness_factor:  roughness,
+                    albedo_tex_index:  tex_index,
+                    normal_tex_index:  normal_index,
+                    orm_tex_index:     orm_index,
+                },
             });
 
             prim_idx += 1;
@@ -140,11 +174,14 @@ pub fn load(path: &Path, model_name: &str) -> (Vec<PrimitiveData>, Vec<EmbeddedT
     }
 
     log::debug!(
-        "GLTF '{}': {} primitives, {} albedo textures (skipped {} non-albedo images)",
+        "GLTF '{}': {} primitives, {} textures ({} albedo, {} normal, {} orm, {} skipped)",
         path.display(),
         primitives.len(),
         embedded.len(),
-        document.images().count().saturating_sub(albedo_indices.len()),
+        albedo_indices.len(),
+        normal_indices.len(),
+        orm_indices.len(),
+        document.images().count().saturating_sub(needed_indices.len()),
     );
 
     (primitives, embedded)
