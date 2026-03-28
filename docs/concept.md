@@ -48,7 +48,7 @@ BRAVE — это мини 3D движок на Rust с рендерингом ч
 | `glam`               | Математика (Vec3, Mat4, Quat, SIMD) |
 | `gltf`               | Загрузка .glb/.gltf моделей         |
 | `image`              | Загрузка текстур (PNG, JPG, HDR)    |
-| `shaderc` или `naga` | Компиляция GLSL → SPIR-V            |
+| `naga`               | Компиляция GLSL → SPIR-V (чистый Rust, без C-зависимостей) |
 | `gpu-allocator`      | Выделение GPU памяти                |
 | `toml`               | Парсинг astdb.lock                  |
 | `env_logger`         | Логирование                         |

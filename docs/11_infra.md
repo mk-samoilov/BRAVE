@@ -49,7 +49,7 @@ BRAVE_LOG=error cargo run     # только ошибки
 | `glam` | Математика (Vec3, Mat4, Quat, SIMD) | brv_math |
 | `gltf` | Загрузка .glb/.gltf моделей | brv_assets |
 | `image` | Декодирование текстур (PNG, JPG, HDR) | brv_assets |
-| `shaderc` или `naga` | Компиляция GLSL → SPIR-V | brv_assets |
+| `naga`               | Компиляция GLSL → SPIR-V (чистый Rust, без C-зависимостей) | brv_assets |
 | `gpu-allocator` | Выделение GPU памяти (Vulkan Memory Allocator) | brv_render |
 | `toml` | Парсинг astdb.lock | brv_assets |
 | `env_logger` | Логирование в консоль | brv_core |

@@ -36,6 +36,8 @@ pub struct Object {
     pub transform: TransformField,   // позиция в мире, по умолчанию (0, 0, 0)
     pub rotate: RotateField,         // вращение, по умолчанию identity (нет вращения)
     pub visible: VisibleField,       // видимость, по умолчанию true
+    // scale хранится внутри TransformField, API: transform.set_scale / get_scale
+    // по умолчанию (1.0, 1.0, 1.0)
 
     // === Option (None по умолчанию, заполняются через .set()) ===
     pub mesh: Option<MeshComponent>,     // 3D модель
@@ -49,12 +51,17 @@ pub struct Object {
 
 Эти поля существуют у каждого объекта с момента создания. Не нужно их "добавлять" — они просто есть.
 
-#### TransformField — позиция
+#### TransformField — позиция и масштаб
 
 ```rust
-player.transform.set(0.0, 1.0, 0.0);    // задать позицию (x, y, z)
-player.transform.get() -> Vec3;          // получить текущую позицию
+player.transform.set(0.0, 1.0, 0.0);          // задать позицию (x, y, z)
+player.transform.get() -> Vec3;                 // получить текущую позицию
+
+player.transform.set_scale(2.0, 1.0, 2.0);    // задать масштаб по осям (x, y, z)
+player.transform.get_scale() -> Vec3;           // получить текущий масштаб
 ```
+
+Масштаб по умолчанию = `(1.0, 1.0, 1.0)` (без изменений). Масштаб применяется при построении model matrix: `T * R * S`.
 
 #### RotateField — вращение
 
@@ -133,7 +140,7 @@ player.remove();                    // через сам объект
 game.world.remove_obj("player");    // через world по имени
 ```
 
-При удалении: объект убирается из world, все GPU-ресурсы (mesh, текстуры) остаются в LRU кеше ассетов (могут быть использованы другими объектами).
+При удалении: объект убирается из world. GPU-ресурсы (vertex buffers, текстуры) освобождаются **немедленно**, если никакой другой объект не использует тот же ассет. Если другие объекты ссылаются на тот же загруженный ассет — ресурс остаётся в LRU кеше до вытеснения.
 
 ### Альтернативный способ через .with()
 
@@ -202,5 +209,6 @@ player.script.clear();                           // убрать
 
 - Script **необязательный**. Объект работает и без него.
 - Script вызывается в **fixed update** (physics rate), не в variable update.
+- Script вызывается **всегда**, даже если объект скрыт (`visible = false`). Видимость влияет только на рендер, не на логику.
 - Script получает **`&mut Engine`** — может делать всё что угодно с миром.
 - Используй `game.time.fixed_delta()` внутри скриптов для корректного движения.

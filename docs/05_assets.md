@@ -171,6 +171,6 @@ end = "2098340"
 - **GltfLoader** (`gltf_loader.rs`) — парсит папку с `scene.gltf` + текстуры. Извлекает vertex positions, normals, UVs, indices, PBR-материалы, текстуры. Крейт: `gltf`
 - **GlbLoader** (`glb_loader.rs`) — парсит `.glb` файл (бинарный glTF, всё в одном файле). Крейт: `gltf`
 - **ImageLoader** (`image_loader.rs`) — декодирует PNG/JPG/HDR в raw RGBA пиксели. Крейт: `image`
-- **ShaderLoader** (`shader_loader.rs`) — компилирует GLSL в SPIR-V байткод. Крейт: `shaderc` или `naga`
+- **ShaderLoader** (`shader_loader.rs`) — компилирует GLSL в SPIR-V байткод. Крейт: `naga`
 
 В debug-режиме лоадеры работают в рантайме. В release-режиме лоадеры используются один раз при компиляции (build.rs), а в рантайме данные уже готовы.

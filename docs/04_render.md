@@ -27,6 +27,8 @@ far: f32,       // дальняя плоскость отсечения
 
 Camera — Option-поле на объекте. Рендерер каждый кадр ищет объект с `camera != None` и берёт из него `transform` (позиция) + `rotate` (направление взгляда) + `camera` (fov/near/far) для построения матриц view и projection.
 
+> **Одна активная камера**: если на сцене несколько объектов с `camera != None` одновременно — runtime паника с сообщением `"Multiple cameras found: only one camera allowed"`. Для переключения камер нужно сначала убрать компонент у текущей: `old_cam.camera = None;`, затем установить новой.
+
 ```rust
 let cam = game.world.spawn("camera");
 cam.transform.set(0.0, 5.0, -10.0);
@@ -106,7 +108,7 @@ SpotLight {
 color: Color,        // цвет света
 intensity: f32,      // интенсивность
 range: f32,          // дальность
-angle: f32,          // угол конуса в градусах (половинный угол)
+angle: f32,          // **half-angle** конуса в градусах: angle=30 → конус 60° итого (как в Blender/Unity)
 }
 ```
 
