@@ -1,0 +1,13 @@
+[package]
+name = "brv_render"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+brv_engine = { path = "../brv_engine" }
+brv_window = { path = "../brv_window" }
+ash = "0.38"
+ash-window = "0.13"
+raw-window-handle = "0.6"
+naga = { version = "24", features = ["glsl-in", "spv-out"] }
+log = "0.4"

@@ -10,3 +10,4 @@ pub use brv_window::Window;
 pub use brv_input::{Input, Key, MouseButton};
 pub use brv_math::*;
 pub use brv_colors::*;
+pub use brv_render::{RenderPlugin, RenderMode};

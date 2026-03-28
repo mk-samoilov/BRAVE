@@ -9,3 +9,4 @@ brv_window = { path = "../brv_window" }
 brv_input = { path = "../brv_input" }
 brv_math = { path = "../brv_math" }
 brv_colors = { path = "../brv_colors" }
+brv_render = { path = "../brv_render" }

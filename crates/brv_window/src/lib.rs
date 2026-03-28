@@ -4,6 +4,7 @@ use winit::{
     event_loop::EventLoop,
     window::{CursorGrabMode, Fullscreen, WindowBuilder},
 };
+use raw_window_handle::{HasDisplayHandle, HasWindowHandle, DisplayHandle, WindowHandle, HandleError};
 
 pub use winit::window::Window as WinitWindow;
 
@@ -88,5 +89,17 @@ impl Window {
 
     pub fn request_redraw(&self) {
         self.raw.request_redraw();
+    }
+}
+
+impl HasWindowHandle for Window {
+    fn window_handle(&self) -> Result<WindowHandle<'_>, HandleError> {
+        self.raw.window_handle()
+    }
+}
+
+impl HasDisplayHandle for Window {
+    fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
+        self.raw.display_handle()
     }
 }

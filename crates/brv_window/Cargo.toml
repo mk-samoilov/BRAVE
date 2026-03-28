@@ -5,4 +5,5 @@ edition = "2024"
 
 [dependencies]
 winit = "0.29"
+raw-window-handle = "0.6"
 log = "0.4"

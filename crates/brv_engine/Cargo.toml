@@ -11,3 +11,4 @@ brv_colors = { path = "../brv_colors" }
 glam = "0.29"
 winit = "0.29"
 log = "0.4"
+env_logger = "0.11"

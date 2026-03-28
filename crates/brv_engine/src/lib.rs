@@ -22,11 +22,22 @@ pub trait Plugin: 'static {
     fn build(&self, game: &mut Engine);
 }
 
+pub trait RenderBackend: 'static {
+    fn draw_frame(&mut self);
+    fn on_resize(&mut self, width: u32, height: u32);
+}
+
+pub enum RenderMode {
+    Rasterization,
+    PathTracing,
+}
+
 pub struct Engine {
     pub time: Time,
     pub world: World,
     pub window: Option<brv_window::Window>,
     pub input: Option<brv_input::Input>,
+    pub render: Option<Box<dyn RenderBackend>>,
     systems: Vec<fn(&mut Engine)>,
     startup_systems: Vec<fn(&mut Engine)>,
     registered_plugins: Vec<TypeId>,
@@ -39,6 +50,7 @@ impl Engine {
             world: World::new(),
             window: None,
             input: None,
+            render: None,
             systems: Vec::new(),
             startup_systems: Vec::new(),
             registered_plugins: Vec::new(),
@@ -67,6 +79,10 @@ impl Engine {
     }
 
     pub fn run(mut self) {
+        env_logger::Builder::from_env(
+            env_logger::Env::default().filter_or("BRAVE_LOG", "info")
+        ).init();
+
         let startup = std::mem::take(&mut self.startup_systems);
         for system in startup {
             system(&mut self);
@@ -82,9 +98,17 @@ impl Engine {
         let _ = event_loop.run(move |event, elwt| {
             match event {
                 Event::WindowEvent { ref event, .. } => {
-                    if let WindowEvent::CloseRequested = event {
-                        elwt.exit();
-                        return;
+                    match event {
+                        WindowEvent::CloseRequested => {
+                            elwt.exit();
+                            return;
+                        }
+                        WindowEvent::Resized(size) => {
+                            if let Some(render) = self.render.as_mut() {
+                                render.on_resize(size.width, size.height);
+                            }
+                        }
+                        _ => {}
                     }
                     if let Some(input) = self.input.as_mut() {
                         input.handle_window_event(event);
@@ -118,6 +142,10 @@ impl Engine {
                     let systems = self.systems.clone();
                     for system in systems {
                         system(&mut self);
+                    }
+
+                    if let Some(render) = self.render.as_mut() {
+                        render.draw_frame();
                     }
 
                     if self.window.as_ref().map_or(false, |w| w.should_quit()) {
