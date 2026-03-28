@@ -4,21 +4,14 @@ use winit::{
     keyboard::{KeyCode, PhysicalKey},
 };
 
-/// Физические клавиши клавиатуры.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Key {
-    // Буквы
     A, B, C, D, E, F, G, H, I, J, K, L, M,
     N, O, P, Q, R, S, T, U, V, W, X, Y, Z,
-    // Цифры (основной ряд)
     Num0, Num1, Num2, Num3, Num4, Num5, Num6, Num7, Num8, Num9,
-    // Служебные
     Space, Escape, Enter, Tab, Backspace, Delete,
-    // F-клавиши
     F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12,
-    // Модификаторы
     LShift, RShift, LCtrl, RCtrl, LAlt, RAlt,
-    // Стрелки
     Up, Down, Left, Right,
 }
 
@@ -94,7 +87,6 @@ impl Key {
     }
 }
 
-/// Кнопки мыши.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MouseButton {
     Left,
@@ -114,18 +106,13 @@ impl MouseButton {
 }
 
 pub struct Input {
-    // Клавиатура — два набора для определения pressed/released
     current_keys: HashSet<Key>,
     previous_keys: HashSet<Key>,
-
-    // Мышь
     mouse_pos: (f32, f32),
-    mouse_delta_accum: (f32, f32), // накапливается из DeviceEvent за кадр
-    mouse_delta: (f32, f32),       // финальное значение за кадр
+    mouse_delta_accum: (f32, f32),
+    mouse_delta: (f32, f32),
     mouse_scroll_accum: f32,
     mouse_scroll: f32,
-
-    // Кнопки мыши
     current_mouse: HashSet<MouseButton>,
     previous_mouse: HashSet<MouseButton>,
 }
@@ -145,10 +132,6 @@ impl Input {
         }
     }
 
-    // ── Вызывается game loop'ом в начале кадра ──────────────────────────────
-
-    /// Сбрасывает previous-состояние и переносит delta/scroll в финальные поля.
-    /// Вызывать ПЕРЕД обработкой событий нового кадра.
     pub fn begin_frame(&mut self) {
         self.previous_keys = self.current_keys.clone();
         self.previous_mouse = self.current_mouse.clone();
@@ -157,8 +140,6 @@ impl Input {
         self.mouse_scroll = self.mouse_scroll_accum;
         self.mouse_scroll_accum = 0.0;
     }
-
-    // ── Обработка winit событий ─────────────────────────────────────────────
 
     pub fn handle_window_event(&mut self, event: &WindowEvent) {
         match event {
@@ -194,7 +175,6 @@ impl Input {
         }
     }
 
-    /// DeviceEvent::MouseMotion даёт относительное движение (работает при захваченном курсоре).
     pub fn handle_device_event(&mut self, event: &DeviceEvent) {
         if let DeviceEvent::MouseMotion { delta } = event {
             self.mouse_delta_accum.0 += delta.0 as f32;
@@ -202,49 +182,38 @@ impl Input {
         }
     }
 
-    // ── Polling API ──────────────────────────────────────────────────────────
-
-    /// Клавиша нажата в этом кадре (true только один кадр).
     pub fn is_key_pressed(&self, key: Key) -> bool {
         self.current_keys.contains(&key) && !self.previous_keys.contains(&key)
     }
 
-    /// Клавиша зажата (true пока держишь).
     pub fn is_key_held(&self, key: Key) -> bool {
         self.current_keys.contains(&key)
     }
 
-    /// Клавиша отпущена в этом кадре (true только один кадр).
     pub fn is_key_released(&self, key: Key) -> bool {
         !self.current_keys.contains(&key) && self.previous_keys.contains(&key)
     }
 
-    /// Абсолютная позиция курсора в пикселях.
     pub fn mouse_position(&self) -> (f32, f32) {
         self.mouse_pos
     }
 
-    /// Относительное движение мыши за кадр (dx, dy).
     pub fn mouse_delta(&self) -> (f32, f32) {
         self.mouse_delta
     }
 
-    /// Прокрутка колёсика за кадр: >0 вверх, <0 вниз, 0.0 не крутили.
     pub fn mouse_scroll(&self) -> f32 {
         self.mouse_scroll
     }
 
-    /// Кнопка мыши нажата в этом кадре.
     pub fn is_mouse_pressed(&self, btn: MouseButton) -> bool {
         self.current_mouse.contains(&btn) && !self.previous_mouse.contains(&btn)
     }
 
-    /// Кнопка мыши зажата.
     pub fn is_mouse_held(&self, btn: MouseButton) -> bool {
         self.current_mouse.contains(&btn)
     }
 
-    /// Кнопка мыши отпущена в этом кадре.
     pub fn is_mouse_released(&self, btn: MouseButton) -> bool {
         !self.current_mouse.contains(&btn) && self.previous_mouse.contains(&btn)
     }

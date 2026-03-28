@@ -35,8 +35,6 @@ impl Window {
         }
     }
 
-    /// Забирает event loop для передачи в game loop (brv_core).
-    /// Паникует если уже был взят.
     pub fn take_event_loop(&mut self) -> EventLoop<()> {
         self.event_loop.take().expect("EventLoop already taken")
     }
@@ -65,7 +63,6 @@ impl Window {
         self.raw.set_cursor_visible(visible);
     }
 
-    /// Захватить курсор в окне (FPS-режим): курсор скрыт и заблокирован.
     pub fn set_cursor_grabbed(&self, grabbed: bool) {
         if grabbed {
             self.raw
@@ -81,7 +78,6 @@ impl Window {
         }
     }
 
-    /// Сигнал на закрытие — game loop проверяет это каждый кадр.
     pub fn quit(&self) {
         self.should_quit.store(true, Ordering::Relaxed);
     }
