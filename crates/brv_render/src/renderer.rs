@@ -6,144 +6,6 @@ use glam::{Mat4, Vec3};
 
 const MAX_FRAMES: usize = 2;
 
-const VERT_SRC: &str = r#"
-#version 450
-
-layout(location = 0) in vec3 in_pos;
-layout(location = 1) in vec3 in_normal;
-layout(location = 2) in vec2 in_uv;
-
-layout(set = 0, binding = 0) uniform UBO {
-    mat4 view_proj;
-    vec4 camera_pos;
-};
-
-layout(push_constant) uniform Push {
-    mat4 model;
-    vec4 albedo;
-    vec4 mr;
-};
-
-layout(location = 0) out vec3 frag_world_pos;
-layout(location = 1) out vec3 frag_normal;
-layout(location = 2) out vec2 frag_uv;
-
-void main() {
-    vec4 world_pos = model * vec4(in_pos, 1.0);
-    frag_world_pos = world_pos.xyz;
-    frag_normal = normalize(mat3(model) * in_normal);
-    frag_uv = in_uv;
-    gl_Position = view_proj * world_pos;
-}
-"#;
-
-const FRAG_SRC: &str = r#"
-#version 450
-
-const float PI = 3.14159265359;
-
-layout(location = 0) in vec3 frag_world_pos;
-layout(location = 1) in vec3 frag_normal;
-layout(location = 2) in vec2 frag_uv;
-
-layout(location = 0) out vec4 out_color;
-
-layout(set = 0, binding = 0) uniform UBO {
-    mat4 view_proj;
-    vec4 camera_pos;
-};
-
-layout(push_constant) uniform Push {
-    mat4 model;
-    vec4 albedo;
-    vec4 mr;
-};
-
-float D_GGX(float NdotH, float roughness) {
-    float a = roughness * roughness;
-    float a2 = a * a;
-    float d = NdotH * NdotH * (a2 - 1.0) + 1.0;
-    return a2 / (PI * d * d);
-}
-
-float G_SchlickGGX(float NdotV, float roughness) {
-    float r = roughness + 1.0;
-    float k = (r * r) / 8.0;
-    return NdotV / (NdotV * (1.0 - k) + k);
-}
-
-float G_Smith(float NdotV, float NdotL, float roughness) {
-    return G_SchlickGGX(NdotV, roughness) * G_SchlickGGX(NdotL, roughness);
-}
-
-vec3 F_Schlick(float cosTheta, vec3 F0) {
-    return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
-}
-
-void main() {
-    vec3 albedo_color = albedo.rgb;
-    float metallic = mr.x;
-    float roughness = clamp(mr.y, 0.05, 1.0);
-
-    vec3 N = normalize(frag_normal);
-    vec3 V = normalize(camera_pos.xyz - frag_world_pos);
-    vec3 F0 = mix(vec3(0.04), albedo_color, metallic);
-
-    vec3 light_dir = normalize(vec3(0.5, 1.0, 0.3));
-    vec3 light_color = vec3(1.0, 0.98, 0.95);
-    float light_intensity = 3.0;
-
-    vec3 L = light_dir;
-    vec3 H = normalize(V + L);
-
-    float NdotL = max(dot(N, L), 0.0);
-    float NdotV = max(dot(N, V), 0.0001);
-    float NdotH = max(dot(N, H), 0.0);
-    float HdotV = max(dot(H, V), 0.0);
-
-    float D = D_GGX(NdotH, roughness);
-    float G = G_Smith(NdotV, NdotL, roughness);
-    vec3 F = F_Schlick(HdotV, F0);
-
-    vec3 specular = (D * G * F) / max(4.0 * NdotV * NdotL, 0.0001);
-    vec3 kd = (1.0 - F) * (1.0 - metallic);
-
-    vec3 radiance = light_color * light_intensity;
-    vec3 Lo = (kd * albedo_color / PI + specular) * radiance * NdotL;
-
-    vec3 ambient = vec3(0.03) * albedo_color;
-    vec3 color = ambient + Lo;
-
-    color = color / (color + vec3(1.0));
-    color = pow(color, vec3(1.0 / 2.2));
-
-    out_color = vec4(color, albedo.a);
-}
-"#;
-
-fn compile_glsl(src: &str, stage: naga::ShaderStage) -> Vec<u32> {
-    let mut frontend = naga::front::glsl::Frontend::default();
-    let module = frontend
-        .parse(&naga::front::glsl::Options::from(stage), src)
-        .expect("GLSL parse error");
-    let info = naga::valid::Validator::new(
-        naga::valid::ValidationFlags::empty(),
-        naga::valid::Capabilities::PUSH_CONSTANT,
-    )
-    .validate(&module)
-    .expect("Shader validation error");
-    naga::back::spv::write_vec(
-        &module,
-        &info,
-        &naga::back::spv::Options {
-            lang_version: (1, 0),
-            ..Default::default()
-        },
-        None,
-    )
-    .expect("SPIR-V generation error")
-}
-
 struct GpuMesh {
     vertex_buffer: vk::Buffer,
     vertex_memory: vk::DeviceMemory,
@@ -216,7 +78,7 @@ pub struct Renderer {
 }
 
 impl Renderer {
-    pub fn new(window: &Window) -> Self {
+    pub fn new(window: &Window, assets: &mut brv_assets::Assets) -> Self {
         let entry = unsafe { ash::Entry::load().expect("Failed to load Vulkan") };
         let instance = Self::create_instance(&entry, window);
 
@@ -256,12 +118,12 @@ impl Renderer {
 
         let descriptor_set_layout = Self::create_scene_descriptor_set_layout(&device);
 
-        let vert_spv = compile_glsl(VERT_SRC, naga::ShaderStage::Vertex);
-        let frag_spv = compile_glsl(FRAG_SRC, naga::ShaderStage::Fragment);
+        let vert_spv = assets.load_shader_spv("shaders/mesh.vert.glsl");
+        let frag_spv = assets.load_shader_spv("shaders/mesh.frag.glsl");
         let (pipeline_layout, pipeline) = Self::create_pipeline(
             &device, render_pass,
             descriptor_set_layout,
-            &vert_spv, &frag_spv,
+            &vert_spv[..], &frag_spv[..],
         );
 
         let framebuffers = Self::create_framebuffers(
@@ -339,6 +201,7 @@ impl Renderer {
         )
         .unwrap();
 
+        #[cfg_attr(not(debug_assertions), allow(unused_mut))]
         let mut extensions: Vec<*const i8> = surface_extensions.to_vec();
         #[cfg(debug_assertions)]
         extensions.push(ash::ext::debug_utils::NAME.as_ptr());

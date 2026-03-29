@@ -39,6 +39,7 @@ pub struct Engine {
     pub window: Option<brv_window::Window>,
     pub input: Option<brv_input::Input>,
     pub render: Option<Box<dyn RenderBackend>>,
+    pub assets: Option<brv_assets::Assets>,
     systems: Vec<fn(&mut Engine)>,
     startup_systems: Vec<fn(&mut Engine)>,
     registered_plugins: Vec<TypeId>,
@@ -55,6 +56,7 @@ impl Engine {
             window: None,
             input: None,
             render: None,
+            assets: None,
             systems: Vec::new(),
             startup_systems: Vec::new(),
             registered_plugins: Vec::new(),
@@ -194,5 +196,21 @@ pub struct InputPlugin;
 impl Plugin for InputPlugin {
     fn build(&self, game: &mut Engine) {
         game.input = Some(brv_input::Input::new());
+    }
+}
+
+pub struct AssetPlugin {
+    root: String,
+}
+
+impl AssetPlugin {
+    pub fn new(root: &str) -> Self {
+        Self { root: root.to_string() }
+    }
+}
+
+impl Plugin for AssetPlugin {
+    fn build(&self, game: &mut Engine) {
+        game.assets = Some(brv_assets::Assets::new(&self.root));
     }
 }

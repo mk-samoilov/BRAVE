@@ -1,4 +1,4 @@
-pub use brv_engine::{Engine, Plugin, Time, WindowPlugin, InputPlugin};
+pub use brv_engine::{Engine, Plugin, Time, WindowPlugin, InputPlugin, AssetPlugin};
 pub use brv_engine::{
     World, Object,
     TransformField, RotateField, VisibleField,
@@ -12,3 +12,4 @@ pub use brv_input::{Input, Key, MouseButton};
 pub use brv_math::*;
 pub use brv_colors::*;
 pub use brv_render::{RenderPlugin, RenderMode};
+pub use brv_assets::{Assets, AssetType, AssetData};

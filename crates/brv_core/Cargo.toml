@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+brv_assets = { path = "../brv_assets" }
 brv_engine = { path = "../brv_engine" }
 brv_window = { path = "../brv_window" }
 brv_input = { path = "../brv_input" }

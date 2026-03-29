@@ -35,7 +35,7 @@ pub fn update(obj: &mut Object, game: &mut Engine) {
 
     if rmb {
         let (dx, dy) = input.mouse_delta();
-        let sensitivity = 0.001;
+        let sensitivity = 0.00155;
         PITCH.with(|p| {
             let v = (p.get() + dy * sensitivity)
                 .clamp(-(std::f32::consts::FRAC_PI_2 - 0.01), std::f32::consts::FRAC_PI_2 - 0.01);

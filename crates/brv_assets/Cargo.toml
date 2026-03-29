@@ -1,23 +1,16 @@
-[workspace]
-members = ["crates/*"]
-resolver = "2"
-
-[profile.dev.package."*"]
-opt-level = 3
-
 [package]
-name = "brave-game"
+name = "brv_assets"
 version = "0.1.0"
 edition = "2024"
 
-[package.metadata.brave]
-asset_key = "u753f1g"
-
 [dependencies]
-brv_core = { path = "crates/brv_core" }
-
-[build-dependencies]
+brv_math = { path = "../brv_math" }
+brv_colors = { path = "../brv_colors" }
 naga = { version = "24", features = ["glsl-in", "spv-out"] }
 gltf = "1"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+toml = "0.8"
+log = "0.4"
+
+[build-dependencies]
 toml = "0.8"
