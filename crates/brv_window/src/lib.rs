@@ -4,6 +4,12 @@ use winit::{
     event_loop::EventLoop,
     window::{CursorGrabMode, Fullscreen, WindowBuilder},
 };
+
+pub enum WindowType {
+    Windowed,
+    Fullscreen,
+    FullscreenBordered,
+}
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle, DisplayHandle, WindowHandle, HandleError};
 
 pub use winit::window::Window as WinitWindow;
@@ -50,6 +56,25 @@ impl Window {
 
     pub fn set_title(&self, title: &str) {
         self.raw.set_title(title);
+    }
+
+    pub fn set_type(&self, window_type: WindowType) {
+        match window_type {
+            WindowType::Windowed => {
+                self.raw.set_fullscreen(None);
+                self.raw.set_decorations(true);
+                self.raw.set_maximized(false);
+            }
+            WindowType::Fullscreen => {
+                self.raw.set_decorations(false);
+                self.raw.set_fullscreen(Some(Fullscreen::Borderless(None)));
+            }
+            WindowType::FullscreenBordered => {
+                self.raw.set_fullscreen(None);
+                self.raw.set_decorations(true);
+                self.raw.set_maximized(true);
+            }
+        }
     }
 
     pub fn set_fullscreen(&self, enabled: bool) {

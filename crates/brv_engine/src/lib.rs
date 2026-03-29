@@ -10,7 +10,7 @@ pub use object::{
 };
 pub use world::World;
 pub use types::{
-    Camera, MeshComponent, Light,
+    Camera, MeshComponent, MeshData, Vertex, Light,
     DirectionalLight, PointLight, SpotLight, AmbientLight,
 };
 
@@ -23,7 +23,7 @@ pub trait Plugin: 'static {
 }
 
 pub trait RenderBackend: 'static {
-    fn draw_frame(&mut self);
+    fn draw_frame(&mut self, world: &World);
     fn on_resize(&mut self, width: u32, height: u32);
 }
 
@@ -45,6 +45,9 @@ pub struct Engine {
 
 impl Engine {
     pub fn new() -> Self {
+        env_logger::Builder::from_env(
+            env_logger::Env::default().filter_or("BRAVE_LOG", "info")
+        ).init();
         Self {
             time: Time::new(),
             world: World::new(),
@@ -79,10 +82,6 @@ impl Engine {
     }
 
     pub fn run(mut self) {
-        env_logger::Builder::from_env(
-            env_logger::Env::default().filter_or("BRAVE_LOG", "info")
-        ).init();
-
         let startup = std::mem::take(&mut self.startup_systems);
         for system in startup {
             system(&mut self);
@@ -145,7 +144,8 @@ impl Engine {
                     }
 
                     if let Some(render) = self.render.as_mut() {
-                        render.draw_frame();
+                        let world_ptr: *const World = &self.world;
+                        render.draw_frame(unsafe { &*world_ptr });
                     }
 
                     if self.window.as_ref().map_or(false, |w| w.should_quit()) {

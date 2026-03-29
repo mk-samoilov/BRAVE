@@ -11,3 +11,4 @@ ash-window = "0.13"
 raw-window-handle = "0.6"
 naga = { version = "24", features = ["glsl-in", "spv-out"] }
 log = "0.4"
+glam = "0.29"

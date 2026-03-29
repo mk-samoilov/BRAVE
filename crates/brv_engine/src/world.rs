@@ -32,6 +32,10 @@ impl World {
         self.objects.remove(name);
     }
 
+    pub fn objects(&self) -> impl Iterator<Item = &Object> {
+        self.objects.values().map(|b| b.as_ref())
+    }
+
     pub(crate) fn script_names(&self) -> Vec<String> {
         self.objects
             .iter()

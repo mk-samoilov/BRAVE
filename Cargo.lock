@@ -279,6 +279,7 @@ dependencies = [
  "ash-window",
  "brv_engine",
  "brv_window",
+ "glam",
  "log",
  "naga",
  "raw-window-handle",

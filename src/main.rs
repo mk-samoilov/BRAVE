@@ -4,14 +4,14 @@ mod player;
 use brv_core::prelude::*;
 
 fn main() {
-    let mut engine = Engine::new();
+    let mut game = Engine::new();
 
-    engine.add_plugin(WindowPlugin { title: "BRAVE", width: 1280, height: 720 });
-    engine.add_plugin(InputPlugin);
-    engine.add_plugin(RenderPlugin);
+    game.add_plugin(WindowPlugin { title: "My BRAVE Game", width: 1920, height: 1080 });
+    game.add_plugin(InputPlugin);
+    game.add_plugin(RenderPlugin);
 
-    engine.add_startup_system(game::setup);
-    engine.add_system(game::update);
+    game.add_startup_system(game::setup);
+    game.add_system(game::update);
 
-    engine.run();
+    game.run();
 }

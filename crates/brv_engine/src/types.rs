@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use brv_colors::Color;
 
 pub struct Camera {
@@ -6,7 +7,27 @@ pub struct Camera {
     pub far: f32,
 }
 
-pub struct MeshComponent;
+#[repr(C)]
+pub struct Vertex {
+    pub position: [f32; 3],
+    pub normal: [f32; 3],
+    pub uv: [f32; 2],
+}
+
+pub struct MeshData {
+    pub vertices: Vec<Vertex>,
+    pub indices: Vec<u32>,
+}
+
+pub struct MeshComponent {
+    pub data: Arc<MeshData>,
+}
+
+impl MeshComponent {
+    pub fn new(vertices: Vec<Vertex>, indices: Vec<u32>) -> Self {
+        Self { data: Arc::new(MeshData { vertices, indices }) }
+    }
+}
 
 pub struct DirectionalLight {
     pub color: Color,
