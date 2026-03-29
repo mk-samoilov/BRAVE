@@ -15,33 +15,109 @@ layout(location = 2) in vec2 in_uv;
 
 layout(set = 0, binding = 0) uniform UBO {
     mat4 view_proj;
+    vec4 camera_pos;
 };
 
 layout(push_constant) uniform Push {
     mat4 model;
+    vec4 albedo;
+    vec4 mr;
 };
 
-layout(location = 0) out vec3 frag_normal;
-layout(location = 1) out vec2 frag_uv;
+layout(location = 0) out vec3 frag_world_pos;
+layout(location = 1) out vec3 frag_normal;
+layout(location = 2) out vec2 frag_uv;
 
 void main() {
-    gl_Position = view_proj * model * vec4(in_pos, 1.0);
+    vec4 world_pos = model * vec4(in_pos, 1.0);
+    frag_world_pos = world_pos.xyz;
     frag_normal = normalize(mat3(model) * in_normal);
     frag_uv = in_uv;
+    gl_Position = view_proj * world_pos;
 }
 "#;
 
 const FRAG_SRC: &str = r#"
 #version 450
 
-layout(location = 0) in vec3 frag_normal;
-layout(location = 1) in vec2 frag_uv;
+const float PI = 3.14159265359;
+
+layout(location = 0) in vec3 frag_world_pos;
+layout(location = 1) in vec3 frag_normal;
+layout(location = 2) in vec2 frag_uv;
+
 layout(location = 0) out vec4 out_color;
 
+layout(set = 0, binding = 0) uniform UBO {
+    mat4 view_proj;
+    vec4 camera_pos;
+};
+
+layout(push_constant) uniform Push {
+    mat4 model;
+    vec4 albedo;
+    vec4 mr;
+};
+
+float D_GGX(float NdotH, float roughness) {
+    float a = roughness * roughness;
+    float a2 = a * a;
+    float d = NdotH * NdotH * (a2 - 1.0) + 1.0;
+    return a2 / (PI * d * d);
+}
+
+float G_SchlickGGX(float NdotV, float roughness) {
+    float r = roughness + 1.0;
+    float k = (r * r) / 8.0;
+    return NdotV / (NdotV * (1.0 - k) + k);
+}
+
+float G_Smith(float NdotV, float NdotL, float roughness) {
+    return G_SchlickGGX(NdotV, roughness) * G_SchlickGGX(NdotL, roughness);
+}
+
+vec3 F_Schlick(float cosTheta, vec3 F0) {
+    return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
+
 void main() {
-    vec3 light_dir = normalize(vec3(1.0, 2.0, 1.0));
-    float diffuse = max(dot(frag_normal, light_dir), 0.1);
-    out_color = vec4(vec3(0.7, 0.7, 0.8) * diffuse, 1.0);
+    vec3 albedo_color = albedo.rgb;
+    float metallic = mr.x;
+    float roughness = clamp(mr.y, 0.05, 1.0);
+
+    vec3 N = normalize(frag_normal);
+    vec3 V = normalize(camera_pos.xyz - frag_world_pos);
+    vec3 F0 = mix(vec3(0.04), albedo_color, metallic);
+
+    vec3 light_dir = normalize(vec3(0.5, 1.0, 0.3));
+    vec3 light_color = vec3(1.0, 0.98, 0.95);
+    float light_intensity = 3.0;
+
+    vec3 L = light_dir;
+    vec3 H = normalize(V + L);
+
+    float NdotL = max(dot(N, L), 0.0);
+    float NdotV = max(dot(N, V), 0.0001);
+    float NdotH = max(dot(N, H), 0.0);
+    float HdotV = max(dot(H, V), 0.0);
+
+    float D = D_GGX(NdotH, roughness);
+    float G = G_Smith(NdotV, NdotL, roughness);
+    vec3 F = F_Schlick(HdotV, F0);
+
+    vec3 specular = (D * G * F) / max(4.0 * NdotV * NdotL, 0.0001);
+    vec3 kd = (1.0 - F) * (1.0 - metallic);
+
+    vec3 radiance = light_color * light_intensity;
+    vec3 Lo = (kd * albedo_color / PI + specular) * radiance * NdotL;
+
+    vec3 ambient = vec3(0.03) * albedo_color;
+    vec3 color = ambient + Lo;
+
+    color = color / (color + vec3(1.0));
+    color = pow(color, vec3(1.0 / 2.2));
+
+    out_color = vec4(color, albedo.a);
 }
 "#;
 
@@ -79,6 +155,21 @@ struct GpuMesh {
 struct DrawCall {
     mesh_key: usize,
     model: [[f32; 4]; 4],
+    albedo: [f32; 4],
+    metallic_roughness: [f32; 4],
+}
+
+#[repr(C)]
+struct PushData {
+    model: [[f32; 4]; 4],
+    albedo: [f32; 4],
+    mr: [f32; 4],
+}
+
+#[repr(C)]
+struct SceneUBO {
+    view_proj: [[f32; 4]; 4],
+    camera_pos: [f32; 4],
 }
 
 pub struct Renderer {
@@ -154,14 +245,8 @@ impl Renderer {
         let swapchain_loader = ash::khr::swapchain::Device::new(&instance, &device);
         let (swapchain, swapchain_format, swapchain_extent, swapchain_image_views) =
             Self::create_swapchain(
-                &device,
-                physical_device,
-                &surface_loader,
-                surface,
-                &swapchain_loader,
-                window,
-                graphics_family,
-                present_family,
+                &device, physical_device, &surface_loader, surface,
+                &swapchain_loader, window, graphics_family, present_family,
             );
 
         let (depth_image, depth_memory, depth_view) =
@@ -169,12 +254,15 @@ impl Renderer {
 
         let render_pass = Self::create_render_pass(&device, swapchain_format);
 
-        let descriptor_set_layout = Self::create_descriptor_set_layout(&device);
+        let descriptor_set_layout = Self::create_scene_descriptor_set_layout(&device);
 
         let vert_spv = compile_glsl(VERT_SRC, naga::ShaderStage::Vertex);
         let frag_spv = compile_glsl(FRAG_SRC, naga::ShaderStage::Fragment);
-        let (pipeline_layout, pipeline) =
-            Self::create_pipeline(&device, render_pass, descriptor_set_layout, &vert_spv, &frag_spv);
+        let (pipeline_layout, pipeline) = Self::create_pipeline(
+            &device, render_pass,
+            descriptor_set_layout,
+            &vert_spv, &frag_spv,
+        );
 
         let framebuffers = Self::create_framebuffers(
             &device, render_pass, &swapchain_image_views, depth_view, swapchain_extent,
@@ -190,8 +278,8 @@ impl Renderer {
         let (uniform_buffers, uniform_memories, uniform_mapped) =
             Self::create_uniform_buffers(&instance, physical_device, &device);
 
-        let descriptor_pool = Self::create_descriptor_pool(&device);
-        let descriptor_sets = Self::create_descriptor_sets(
+        let descriptor_pool = Self::create_scene_descriptor_pool(&device);
+        let descriptor_sets = Self::create_scene_descriptor_sets(
             &device, descriptor_pool, descriptor_set_layout, &uniform_buffers,
         );
 
@@ -609,12 +697,12 @@ impl Renderer {
         unsafe { device.create_render_pass(&info, None).unwrap() }
     }
 
-    fn create_descriptor_set_layout(device: &Device) -> vk::DescriptorSetLayout {
+    fn create_scene_descriptor_set_layout(device: &Device) -> vk::DescriptorSetLayout {
         let binding = vk::DescriptorSetLayoutBinding::default()
             .binding(0)
             .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
             .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::VERTEX);
+            .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT);
 
         let info = vk::DescriptorSetLayoutCreateInfo::default()
             .bindings(std::slice::from_ref(&binding));
@@ -625,7 +713,7 @@ impl Renderer {
     fn create_pipeline(
         device: &Device,
         render_pass: vk::RenderPass,
-        descriptor_set_layout: vk::DescriptorSetLayout,
+        scene_layout: vk::DescriptorSetLayout,
         vert_spv: &[u32],
         frag_spv: &[u32],
     ) -> (vk::PipelineLayout, vk::Pipeline) {
@@ -716,11 +804,11 @@ impl Renderer {
             .attachments(std::slice::from_ref(&blend_attachment));
 
         let push_range = vk::PushConstantRange::default()
-            .stage_flags(vk::ShaderStageFlags::VERTEX)
+            .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
             .offset(0)
-            .size(64);
+            .size(std::mem::size_of::<PushData>() as u32);
 
-        let set_layouts = [descriptor_set_layout];
+        let set_layouts = [scene_layout];
         let layout_info = vk::PipelineLayoutCreateInfo::default()
             .set_layouts(&set_layouts)
             .push_constant_ranges(std::slice::from_ref(&push_range));
@@ -823,7 +911,7 @@ impl Renderer {
         physical_device: vk::PhysicalDevice,
         device: &Device,
     ) -> (Vec<vk::Buffer>, Vec<vk::DeviceMemory>, Vec<*mut u8>) {
-        let size = 64u64;
+        let size = std::mem::size_of::<SceneUBO>() as u64;
         let mut buffers = Vec::new();
         let mut memories = Vec::new();
         let mut ptrs = Vec::new();
@@ -847,7 +935,7 @@ impl Renderer {
         (buffers, memories, ptrs)
     }
 
-    fn create_descriptor_pool(device: &Device) -> vk::DescriptorPool {
+    fn create_scene_descriptor_pool(device: &Device) -> vk::DescriptorPool {
         let pool_size = vk::DescriptorPoolSize::default()
             .ty(vk::DescriptorType::UNIFORM_BUFFER)
             .descriptor_count(MAX_FRAMES as u32);
@@ -859,7 +947,7 @@ impl Renderer {
         unsafe { device.create_descriptor_pool(&info, None).unwrap() }
     }
 
-    fn create_descriptor_sets(
+    fn create_scene_descriptor_sets(
         device: &Device,
         pool: vk::DescriptorPool,
         layout: vk::DescriptorSetLayout,
@@ -876,7 +964,7 @@ impl Renderer {
             let buffer_info = vk::DescriptorBufferInfo::default()
                 .buffer(uniform_buffers[i])
                 .offset(0)
-                .range(64);
+                .range(std::mem::size_of::<SceneUBO>() as u64);
 
             let write = vk::WriteDescriptorSet::default()
                 .dst_set(set)
@@ -921,7 +1009,9 @@ impl Renderer {
             .sharing_mode(vk::SharingMode::EXCLUSIVE);
         let buffer = unsafe { device.create_buffer(&buffer_info, None).unwrap() };
         let mem_reqs = unsafe { device.get_buffer_memory_requirements(buffer) };
-        let mem_type = Self::find_memory_type(instance, physical_device, mem_reqs.memory_type_bits, props);
+        let mem_type = Self::find_memory_type(
+            instance, physical_device, mem_reqs.memory_type_bits, props,
+        );
         let alloc_info = vk::MemoryAllocateInfo::default()
             .allocation_size(mem_reqs.size)
             .memory_type_index(mem_type);
@@ -934,10 +1024,12 @@ impl Renderer {
         instance: &Instance,
         physical_device: vk::PhysicalDevice,
         device: &Device,
-        data: &brv_engine::MeshData,
+        mesh: &brv_engine::MeshComponent,
     ) -> GpuMesh {
-        let vb_size = (data.vertices.len() * std::mem::size_of::<brv_engine::Vertex>()) as vk::DeviceSize;
-        let ib_size = (data.indices.len() * std::mem::size_of::<u32>()) as vk::DeviceSize;
+        let vb_size = (mesh.data.vertices.len() * std::mem::size_of::<brv_engine::Vertex>())
+            as vk::DeviceSize;
+        let ib_size =
+            (mesh.data.indices.len() * std::mem::size_of::<u32>()) as vk::DeviceSize;
 
         let (vertex_buffer, vertex_memory) = Self::create_buffer(
             instance, physical_device, device, vb_size,
@@ -945,8 +1037,14 @@ impl Renderer {
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
         );
         unsafe {
-            let ptr = device.map_memory(vertex_memory, 0, vb_size, vk::MemoryMapFlags::empty()).unwrap();
-            std::ptr::copy_nonoverlapping(data.vertices.as_ptr() as *const u8, ptr as *mut u8, vb_size as usize);
+            let ptr = device
+                .map_memory(vertex_memory, 0, vb_size, vk::MemoryMapFlags::empty())
+                .unwrap();
+            std::ptr::copy_nonoverlapping(
+                mesh.data.vertices.as_ptr() as *const u8,
+                ptr as *mut u8,
+                vb_size as usize,
+            );
             device.unmap_memory(vertex_memory);
         }
 
@@ -956,8 +1054,14 @@ impl Renderer {
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
         );
         unsafe {
-            let ptr = device.map_memory(index_memory, 0, ib_size, vk::MemoryMapFlags::empty()).unwrap();
-            std::ptr::copy_nonoverlapping(data.indices.as_ptr() as *const u8, ptr as *mut u8, ib_size as usize);
+            let ptr = device
+                .map_memory(index_memory, 0, ib_size, vk::MemoryMapFlags::empty())
+                .unwrap();
+            std::ptr::copy_nonoverlapping(
+                mesh.data.indices.as_ptr() as *const u8,
+                ptr as *mut u8,
+                ib_size as usize,
+            );
             device.unmap_memory(index_memory);
         }
 
@@ -966,11 +1070,14 @@ impl Renderer {
             vertex_memory,
             index_buffer,
             index_memory,
-            index_count: data.indices.len() as u32,
+            index_count: mesh.data.indices.len() as u32,
         }
     }
 
-    fn compute_view_proj(world: &brv_engine::World, aspect: f32) -> [[f32; 4]; 4] {
+    fn compute_view_proj(
+        world: &brv_engine::World,
+        aspect: f32,
+    ) -> ([[f32; 4]; 4], [f32; 4]) {
         let mut camera_count = 0;
         let mut result = None;
 
@@ -992,17 +1099,14 @@ impl Renderer {
                     cam.far,
                 );
                 proj.y_axis.y *= -1.0;
-                result = Some((proj * view).to_cols_array_2d());
+                result = Some(((proj * view).to_cols_array_2d(), [pos.x, pos.y, pos.z, 0.0]));
             }
         }
 
-        result.unwrap_or_else(|| Mat4::IDENTITY.to_cols_array_2d())
+        result.unwrap_or_else(|| (Mat4::IDENTITY.to_cols_array_2d(), [0.0; 4]))
     }
 
-    fn collect_draw_calls(
-        &mut self,
-        world: &brv_engine::World,
-    ) -> Vec<DrawCall> {
+    fn collect_draw_calls(&mut self, world: &brv_engine::World) -> Vec<DrawCall> {
         let mut calls = Vec::new();
 
         for obj in world.objects() {
@@ -1011,15 +1115,17 @@ impl Renderer {
             }
             if let Some(mesh) = &obj.mesh {
                 let key = std::sync::Arc::as_ptr(&mesh.data) as usize;
+
                 if !self.mesh_cache.contains_key(&key) {
                     let gpu_mesh = Self::upload_mesh(
                         &self.instance,
                         self.physical_device,
                         &self.device,
-                        &mesh.data,
+                        mesh,
                     );
                     self.mesh_cache.insert(key, gpu_mesh);
                 }
+
                 let pos = obj.transform.get();
                 let rot = obj.rotate.quat();
                 let scale = obj.transform.get_scale();
@@ -1027,7 +1133,14 @@ impl Renderer {
                     * Mat4::from_quat(rot)
                     * Mat4::from_scale(scale))
                     .to_cols_array_2d();
-                calls.push(DrawCall { mesh_key: key, model });
+
+                let mat = &mesh.material;
+                calls.push(DrawCall {
+                    mesh_key: key,
+                    model,
+                    albedo: [mat.albedo.r, mat.albedo.g, mat.albedo.b, mat.albedo.a],
+                    metallic_roughness: [mat.metallic, mat.roughness, 0.0, 0.0],
+                });
             }
         }
 
@@ -1090,19 +1203,29 @@ impl Renderer {
 
             for call in draw_calls {
                 if let Some(gpu_mesh) = self.mesh_cache.get(&call.mesh_key) {
-                    let model_bytes = std::slice::from_raw_parts(
-                        call.model.as_ptr() as *const u8,
-                        64,
+                    let push = PushData {
+                        model: call.model,
+                        albedo: call.albedo,
+                        mr: call.metallic_roughness,
+                    };
+                    let push_bytes = std::slice::from_raw_parts(
+                        &push as *const PushData as *const u8,
+                        std::mem::size_of::<PushData>(),
                     );
                     self.device.cmd_push_constants(
                         cmd,
                         self.pipeline_layout,
-                        vk::ShaderStageFlags::VERTEX,
+                        vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
                         0,
-                        model_bytes,
+                        push_bytes,
                     );
-                    self.device.cmd_bind_vertex_buffers(cmd, 0, &[gpu_mesh.vertex_buffer], &[0]);
-                    self.device.cmd_bind_index_buffer(cmd, gpu_mesh.index_buffer, 0, vk::IndexType::UINT32);
+
+                    self.device.cmd_bind_vertex_buffers(
+                        cmd, 0, &[gpu_mesh.vertex_buffer], &[0],
+                    );
+                    self.device.cmd_bind_index_buffer(
+                        cmd, gpu_mesh.index_buffer, 0, vk::IndexType::UINT32,
+                    );
                     self.device.cmd_draw_indexed(cmd, gpu_mesh.index_count, 1, 0, 0, 0);
                 }
             }
@@ -1150,8 +1273,6 @@ impl Renderer {
             .cloned()
             .unwrap_or(formats[0]);
 
-        let present_mode = vk::PresentModeKHR::FIFO;
-
         let extent = if caps.current_extent.width != u32::MAX {
             caps.current_extent
         } else {
@@ -1184,7 +1305,7 @@ impl Renderer {
             .queue_family_indices(&family_indices)
             .pre_transform(caps.current_transform)
             .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
-            .present_mode(present_mode)
+            .present_mode(vk::PresentModeKHR::FIFO)
             .clipped(true);
 
         self.swapchain = unsafe {
@@ -1193,7 +1314,9 @@ impl Renderer {
         self.swapchain_format = format.format;
         self.swapchain_extent = extent;
 
-        let images = unsafe { self.swapchain_loader.get_swapchain_images(self.swapchain).unwrap() };
+        let images = unsafe {
+            self.swapchain_loader.get_swapchain_images(self.swapchain).unwrap()
+        };
         self.swapchain_image_views = images.iter().map(|&img| {
             let info = vk::ImageViewCreateInfo::default()
                 .image(img)
@@ -1235,12 +1358,14 @@ impl brv_engine::RenderBackend for Renderer {
         let draw_calls = self.collect_draw_calls(world);
 
         let aspect = self.swapchain_extent.width as f32 / self.swapchain_extent.height as f32;
-        let view_proj = Self::compute_view_proj(world, aspect);
+        let (view_proj, camera_pos) = Self::compute_view_proj(world, aspect);
+
+        let ubo = SceneUBO { view_proj, camera_pos };
         unsafe {
             std::ptr::copy_nonoverlapping(
-                view_proj.as_ptr() as *const u8,
+                &ubo as *const SceneUBO as *const u8,
                 self.uniform_mapped[self.current_frame],
-                64,
+                std::mem::size_of::<SceneUBO>(),
             );
         }
 
@@ -1362,9 +1487,10 @@ impl Drop for Renderer {
             self.swapchain_loader.destroy_swapchain(self.swapchain, None);
             self.device.destroy_device(None);
             self.surface_loader.destroy_surface(self.surface, None);
+
             #[cfg(debug_assertions)]
-            self.debug_utils
-                .destroy_debug_utils_messenger(self.debug_messenger, None);
+            self.debug_utils.destroy_debug_utils_messenger(self.debug_messenger, None);
+
             self.instance.destroy_instance(None);
         }
     }
@@ -1373,17 +1499,15 @@ impl Drop for Renderer {
 #[cfg(debug_assertions)]
 unsafe extern "system" fn vulkan_debug_callback(
     severity: vk::DebugUtilsMessageSeverityFlagsEXT,
-    _msg_type: vk::DebugUtilsMessageTypeFlagsEXT,
+    _type: vk::DebugUtilsMessageTypeFlagsEXT,
     data: *const vk::DebugUtilsMessengerCallbackDataEXT,
     _user_data: *mut std::ffi::c_void,
 ) -> vk::Bool32 {
     let msg = unsafe { std::ffi::CStr::from_ptr((*data).p_message) }.to_string_lossy();
     if severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::ERROR) {
         log::error!("[Vulkan] {}", msg);
-    } else if severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::WARNING) {
-        log::warn!("[Vulkan] {}", msg);
     } else {
-        log::debug!("[Vulkan] {}", msg);
+        log::warn!("[Vulkan] {}", msg);
     }
     vk::FALSE
 }

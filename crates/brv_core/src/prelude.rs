@@ -5,6 +5,7 @@ pub use brv_engine::{
     Script, Transform, Component, OptionField,
     Camera, MeshComponent, MeshData, Vertex, Light,
     DirectionalLight, PointLight, SpotLight, AmbientLight,
+    TextureData, Material,
 };
 pub use brv_window::{Window, WindowType};
 pub use brv_input::{Input, Key, MouseButton};

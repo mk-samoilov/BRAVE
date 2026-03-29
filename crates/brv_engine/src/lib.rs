@@ -12,6 +12,7 @@ pub use world::World;
 pub use types::{
     Camera, MeshComponent, MeshData, Vertex, Light,
     DirectionalLight, PointLight, SpotLight, AmbientLight,
+    TextureData, Material,
 };
 
 use std::any::TypeId;
