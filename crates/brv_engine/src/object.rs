@@ -64,6 +64,10 @@ impl RotateField {
         Vec3::new(x, y, z)
     }
 
+    pub fn set_quat(&mut self, quat: Quat) {
+        self.quat = quat;
+    }
+
     pub fn quat(&self) -> Quat {
         self.quat
     }

@@ -5,8 +5,8 @@ pub fn setup(game: &mut Engine) {
 
     let cam = game.world.spawn("camera");
     cam.transform.set(0.0, 3.0, -5.0);
-    cam.look_at_vec(Vec3::ZERO);
     cam.camera.set(Camera { fov: 60.0, near: 0.1, far: 1000.0 });
+    game.add_system(crate::camera::update_system);
 
     let cube_mesh = make_cube();
 
@@ -14,9 +14,6 @@ pub fn setup(game: &mut Engine) {
     obj.transform.set(0.0, 0.0, 0.0);
     obj.mesh.set(cube_mesh);
 
-    let player = game.world.spawn("player");
-    player.transform.set(0.0, 1.0, 0.0);
-    player.script.set(Script::new(crate::player::update));
 }
 
 pub fn update(game: &mut Engine) {

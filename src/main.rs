@@ -1,5 +1,5 @@
 mod game;
-mod player;
+mod camera;
 
 use brv_core::prelude::*;
 
