@@ -9,11 +9,28 @@ pub fn setup(game: &mut Engine) {
     game.add_system(crate::camera::update_system);
 
     let cube_mesh = make_cube();
-
     let obj = game.world.spawn("cube");
     obj.transform.set(0.0, 0.0, 0.0);
     obj.mesh.set(cube_mesh);
 
+    let table_mesh: MeshComponent = game.assets.as_mut().unwrap()
+        .load("models/classic_table", AssetType::GLTFModel)
+        .into();
+    let table = game.world.spawn("table");
+    table.transform.set(2.5, 0.0, 0.0);
+    table.mesh.set(table_mesh);
+
+    let chair_mesh: MeshComponent = game.assets.as_mut().unwrap()
+        .load("models/classic_chair", AssetType::GLTFModel)
+        .into();
+    let chair = game.world.spawn("chair");
+    chair.transform.set(2.3, 0.0, 0.45);
+    chair.transform.set_scale(0.185, 0.185, 0.185);
+    chair.rotate.set_quat(
+        Quat::from_rotation_y(std::f32::consts::PI + 0.25)
+        * Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2),
+    );
+    chair.mesh.set(chair_mesh);
 }
 
 pub fn update(game: &mut Engine) {
