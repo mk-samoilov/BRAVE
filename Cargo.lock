@@ -236,6 +236,7 @@ name = "brave-game"
 version = "0.1.0"
 dependencies = [
  "brv_core",
+ "glam",
  "gltf",
  "image",
  "naga",

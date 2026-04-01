@@ -4,32 +4,34 @@ pub fn setup(game: &mut Engine) {
     game.window.as_ref().unwrap().set_type(WindowType::Fullscreen);
 
     let cam = game.world.spawn("camera");
+
     cam.transform.set(0.0, 3.0, -5.0);
     cam.camera.set(Camera { fov: 60.0, near: 0.1, far: 1000.0 });
     game.add_system(crate::camera::update_system);
 
-    let cube_mesh = make_cube();
     let obj = game.world.spawn("cube");
-    obj.transform.set(0.0, 0.0, 0.0);
-    obj.mesh.set(cube_mesh);
+
+    obj.transform.set(-1.0, 0.0, 0.0);
+    obj.mesh.set(make_cube());
 
     let table_mesh: MeshComponent = game.assets.as_mut().unwrap()
         .load("models/classic_table", AssetType::GLTFModel)
         .into();
+
     let table = game.world.spawn("table");
-    table.transform.set(2.5, 0.0, 0.0);
+
+    table.transform.set(2.3, 1.02, -1.82);
+    table.transform.set_scale(0.017, 0.017, 0.017);
     table.mesh.set(table_mesh);
 
     let chair_mesh: MeshComponent = game.assets.as_mut().unwrap()
         .load("models/classic_chair", AssetType::GLTFModel)
         .into();
+
     let chair = game.world.spawn("chair");
+
     chair.transform.set(2.3, 0.0, 0.45);
-    chair.transform.set_scale(0.185, 0.185, 0.185);
-    chair.rotate.set_quat(
-        Quat::from_rotation_y(std::f32::consts::PI + 0.25)
-        * Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2),
-    );
+    chair.rotate.set_quat(Quat::from_rotation_y(std::f32::consts::PI + 0.25));
     chair.mesh.set(chair_mesh);
 }
 

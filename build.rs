@@ -1,6 +1,7 @@
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use glam::Mat4;
 
 fn read_asset_key(manifest_dir: &str) -> String {
     let cargo_toml = fs::read_to_string(format!("{}/Cargo.toml", manifest_dir))
@@ -39,7 +40,7 @@ fn main() {
 
     let xor_key = read_asset_key(&manifest_dir);
 
-    println!("cargo:warning=Compiling assets/ → {}", deploy_dir.display());
+    println!("cargo:warning=Compiling assets/ -> {}", deploy_dir.display());
 
     let mut index: Vec<(String, String, u64, u64)> = Vec::new(); // (path, file_letter, begin, end)
     let mut current_letter = b'a';
@@ -93,7 +94,7 @@ fn main() {
     let lock_path = deploy_dir.join("astdb.lock");
     fs::write(&lock_path, &encrypted).expect("Failed to write astdb.lock");
 
-    println!("cargo:warning=Assets done: {} files → {}", index.len(), lock_path.display());
+    println!("cargo:warning=Done pack assets (total: {}): \"{}\"", index.len(), lock_path.display());
 }
 
 fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -118,7 +119,7 @@ fn compile_asset(path: &Path) -> Vec<u8> {
         "png" | "jpg" | "jpeg" | "hdr" => compile_image(path),
         "gltf" | "glb" => compile_mesh(path),
         _ => {
-            println!("cargo:warning=[assets]   skip  \"{}\"", name);
+            println!("cargo:warning=Skip asset: \"{}\"", name);
             Vec::new()
         }
     }
@@ -185,34 +186,14 @@ fn compile_mesh(path: &Path) -> Vec<u8> {
     let mut uvs_all: Vec<[f32; 2]> = Vec::new();
     let mut indices_all: Vec<u32> = Vec::new();
 
-    for mesh in doc.meshes() {
-        for prim in mesh.primitives() {
-            let reader = prim.reader(|buf| Some(&buffers[buf.index()]));
-            let positions: Vec<[f32; 3]> = reader.read_positions()
-                .unwrap_or_else(|| panic!("GLTF missing positions: {:?}", path))
-                .collect();
-            let normals: Vec<[f32; 3]> = reader.read_normals()
-                .map(|n| n.collect())
-                .unwrap_or_else(|| vec![[0.0, 1.0, 0.0]; positions.len()]);
-            let uvs: Vec<[f32; 2]> = reader.read_tex_coords(0)
-                .map(|tc| tc.into_f32().collect())
-                .unwrap_or_else(|| vec![[0.0, 0.0]; positions.len()]);
+    let scene = doc.default_scene().or_else(|| doc.scenes().next())
+        .unwrap_or_else(|| panic!("GLTF has no scene: {:?}", path));
 
-            let base = positions_all.len() as u32;
-            positions_all.extend_from_slice(&positions);
-            normals_all.extend_from_slice(&normals);
-            uvs_all.extend_from_slice(&uvs);
-
-            if let Some(iter) = reader.read_indices() {
-                for idx in iter.into_u32() {
-                    indices_all.push(base + idx);
-                }
-            } else {
-                for i in 0..positions.len() as u32 {
-                    indices_all.push(base + i);
-                }
-            }
-        }
+    for node in scene.nodes() {
+        collect_node_mesh(
+            &node, glam::Mat4::IDENTITY, &buffers,
+            &mut positions_all, &mut normals_all, &mut uvs_all, &mut indices_all,
+        );
     }
 
     let vc = positions_all.len() as u64;
@@ -230,6 +211,60 @@ fn compile_mesh(path: &Path) -> Vec<u8> {
         out.extend_from_slice(&idx.to_le_bytes());
     }
     out
+}
+
+fn collect_node_mesh(
+    node:             &gltf::Node,
+    parent_transform: Mat4,
+    buffers:          &[gltf::buffer::Data],
+    positions_all:    &mut Vec<[f32; 3]>,
+    normals_all:      &mut Vec<[f32; 3]>,
+    uvs_all:          &mut Vec<[f32; 2]>,
+    indices_all:      &mut Vec<u32>,
+) {
+    let local      = Mat4::from_cols_array_2d(&node.transform().matrix());
+    let global     = parent_transform * local;
+    let normal_mat = global.inverse().transpose();
+
+    if let Some(mesh) = node.mesh() {
+        for prim in mesh.primitives() {
+            let reader = prim.reader(|buf| Some(&buffers[buf.index()]));
+
+            let positions: Vec<[f32; 3]> = reader.read_positions()
+                .unwrap_or_else(|| panic!("GLTF missing positions"))
+                .collect();
+            let normals: Vec<[f32; 3]> = reader.read_normals()
+                .map(|n| n.collect())
+                .unwrap_or_else(|| vec![[0.0, 1.0, 0.0]; positions.len()]);
+            let uvs: Vec<[f32; 2]> = reader.read_tex_coords(0)
+                .map(|tc| tc.into_f32().collect())
+                .unwrap_or_else(|| vec![[0.0, 0.0]; positions.len()]);
+
+            let base = positions_all.len() as u32;
+
+            for i in 0..positions.len() {
+                let p = global.transform_point3(glam::Vec3::from(positions[i]));
+                let n = normal_mat.transform_vector3(glam::Vec3::from(normals[i])).normalize();
+                positions_all.push(p.into());
+                normals_all.push(n.into());
+                uvs_all.push(uvs[i]);
+            }
+
+            if let Some(iter) = reader.read_indices() {
+                for idx in iter.into_u32() {
+                    indices_all.push(base + idx);
+                }
+            } else {
+                for i in 0..positions.len() as u32 {
+                    indices_all.push(base + i);
+                }
+            }
+        }
+    }
+
+    for child in node.children() {
+        collect_node_mesh(&child, global, buffers, positions_all, normals_all, uvs_all, indices_all);
+    }
 }
 
 fn build_toml(index: &[(String, String, u64, u64)]) -> String {

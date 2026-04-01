@@ -176,7 +176,7 @@ impl Assets {
     pub fn new(root: &str) -> Self {
         #[cfg(debug_assertions)]
         {
-            log::info!("Assets initialized: debug mode, root=\"{}\"", root);
+            log::info!("Assets manager initialized: Debug, root=\"{}\"", root);
             Self {
                 root:              root.to_string(),
                 cache:             HashMap::new(),
@@ -191,7 +191,7 @@ impl Assets {
                 .and_then(|p| p.parent().map(|d| d.to_path_buf()))
                 .unwrap_or_else(|| std::path::PathBuf::from("."));
             let lock_path = exe_dir.join("astdb.lock");
-            log::info!("Assets initialized: release mode, astdb=\"{}\"", lock_path.display());
+            log::info!("Assets manager initialized: Release, astdb=\"{}\"", lock_path.display());
             let compiled_key = env!("BRAVE_COMPILED_ASSET_KEY");
             let index = Self::load_ast_index(&lock_path, compiled_key);
             log::info!("Asset index loaded: {} entries", index.len());
@@ -231,7 +231,7 @@ impl Assets {
     #[cfg(not(debug_assertions))]
     fn read_ast_entry(&self, path: &str) -> Vec<u8> {
         let entry = self.ast_index.get(path)
-            .unwrap_or_else(|| panic!("[assets] \"{}\" not found in astdb.lock", path));
+            .unwrap_or_else(|| panic!("Assets: \"{}\" not found in astdb.lock", path));
         let exe_dir = std::env::current_exe()
             .ok()
             .and_then(|p| p.parent().map(|d| d.to_path_buf()))
@@ -267,7 +267,12 @@ impl Assets {
 
         #[cfg(not(debug_assertions))]
         let (cached, size) = {
-            let raw = self.read_ast_entry(path);
+            let ast_key = match asset_type {
+                AssetType::GLTFModel => format!("{}/scene.gltf", path),
+                AssetType::GLBModel  => path.to_string(),
+                _                    => path.to_string(),
+            };
+            let raw = self.read_ast_entry(&ast_key);
             match asset_type {
                 AssetType::Shader => {
                     let spv: Vec<u32> = raw.chunks_exact(4)
