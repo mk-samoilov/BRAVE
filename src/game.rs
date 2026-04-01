@@ -9,6 +9,16 @@ pub fn setup(game: &mut Engine) {
     cam.camera.set(Camera { fov: 60.0, near: 0.1, far: 1000.0 });
     game.add_system(crate::camera::update_system);
 
+    let sun = game.world.spawn("sun");
+
+    sun.transform.set(45.0, 35.0, 25.0);
+    sun.rotate.set(-0.5, 0.3, 0.0);
+    sun.light.set(DirectionalLight { color: Color::DAYLIGHT, intensity: 3.0 });
+
+    let ambient = game.world.spawn("ambient");
+
+    ambient.light.set(AmbientLight { color: Color::COOL, intensity: 0.1 });
+
     let obj = game.world.spawn("cube");
 
     obj.transform.set(-1.0, 0.0, 0.0);

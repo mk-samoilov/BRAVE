@@ -30,8 +30,40 @@ struct PushData {
 
 #[repr(C)]
 struct SceneUBO {
-    view_proj: [[f32; 4]; 4],
+    view_proj:  [[f32; 4]; 4],
     camera_pos: [f32; 4],
+}
+
+const MAX_DIR_LIGHTS:   usize = 4;
+const MAX_POINT_LIGHTS: usize = 16;
+const MAX_SPOT_LIGHTS:  usize = 8;
+
+#[repr(C)]
+struct GpuDirLight {
+    color_intensity: [f32; 4],
+    direction:       [f32; 4],
+}
+
+#[repr(C)]
+struct GpuPointLight {
+    color_intensity: [f32; 4],
+    position_range:  [f32; 4],
+}
+
+#[repr(C)]
+struct GpuSpotLight {
+    color_intensity: [f32; 4],
+    position_range:  [f32; 4],
+    dir_cos_angle:   [f32; 4],
+}
+
+#[repr(C)]
+struct LightsUBO {
+    counts:      [i32; 4],
+    directional: [GpuDirLight;   MAX_DIR_LIGHTS],
+    point:       [GpuPointLight; MAX_POINT_LIGHTS],
+    spot:        [GpuSpotLight;  MAX_SPOT_LIGHTS],
+    ambient:     [f32; 4],
 }
 
 pub struct Renderer {
@@ -70,6 +102,9 @@ pub struct Renderer {
     uniform_buffers: Vec<vk::Buffer>,
     uniform_memories: Vec<vk::DeviceMemory>,
     uniform_mapped: Vec<*mut u8>,
+    lights_buffers:  Vec<vk::Buffer>,
+    lights_memories: Vec<vk::DeviceMemory>,
+    lights_mapped:   Vec<*mut u8>,
     mesh_cache: HashMap<usize, GpuMesh>,
     #[cfg(debug_assertions)]
     debug_utils: ash::ext::debug_utils::Instance,
@@ -140,9 +175,12 @@ impl Renderer {
         let (uniform_buffers, uniform_memories, uniform_mapped) =
             Self::create_uniform_buffers(&instance, physical_device, &device);
 
+        let (lights_buffers, lights_memories, lights_mapped) =
+            Self::create_lights_buffers(&instance, physical_device, &device);
+
         let descriptor_pool = Self::create_scene_descriptor_pool(&device);
         let descriptor_sets = Self::create_scene_descriptor_sets(
-            &device, descriptor_pool, descriptor_set_layout, &uniform_buffers,
+            &device, descriptor_pool, descriptor_set_layout, &uniform_buffers, &lights_buffers,
         );
 
         log::info!(
@@ -187,6 +225,9 @@ impl Renderer {
             uniform_buffers,
             uniform_memories,
             uniform_mapped,
+            lights_buffers,
+            lights_memories,
+            lights_mapped,
             mesh_cache: HashMap::new(),
             #[cfg(debug_assertions)]
             debug_utils,
@@ -561,15 +602,19 @@ impl Renderer {
     }
 
     fn create_scene_descriptor_set_layout(device: &Device) -> vk::DescriptorSetLayout {
-        let binding = vk::DescriptorSetLayoutBinding::default()
-            .binding(0)
-            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT);
-
-        let info = vk::DescriptorSetLayoutCreateInfo::default()
-            .bindings(std::slice::from_ref(&binding));
-
+        let bindings = [
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(0)
+                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT),
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(1)
+                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+        ];
+        let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
         unsafe { device.create_descriptor_set_layout(&info, None).unwrap() }
     }
 
@@ -801,7 +846,7 @@ impl Renderer {
     fn create_scene_descriptor_pool(device: &Device) -> vk::DescriptorPool {
         let pool_size = vk::DescriptorPoolSize::default()
             .ty(vk::DescriptorType::UNIFORM_BUFFER)
-            .descriptor_count(MAX_FRAMES as u32);
+            .descriptor_count((2 * MAX_FRAMES) as u32);
 
         let info = vk::DescriptorPoolCreateInfo::default()
             .pool_sizes(std::slice::from_ref(&pool_size))
@@ -815,6 +860,7 @@ impl Renderer {
         pool: vk::DescriptorPool,
         layout: vk::DescriptorSetLayout,
         uniform_buffers: &[vk::Buffer],
+        lights_buffers:  &[vk::Buffer],
     ) -> Vec<vk::DescriptorSet> {
         let layouts = [layout; MAX_FRAMES];
         let alloc_info = vk::DescriptorSetAllocateInfo::default()
@@ -824,21 +870,60 @@ impl Renderer {
         let sets = unsafe { device.allocate_descriptor_sets(&alloc_info).unwrap() };
 
         for (i, &set) in sets.iter().enumerate() {
-            let buffer_info = vk::DescriptorBufferInfo::default()
+            let scene_info = vk::DescriptorBufferInfo::default()
                 .buffer(uniform_buffers[i])
                 .offset(0)
                 .range(std::mem::size_of::<SceneUBO>() as u64);
 
-            let write = vk::WriteDescriptorSet::default()
-                .dst_set(set)
-                .dst_binding(0)
-                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-                .buffer_info(std::slice::from_ref(&buffer_info));
+            let lights_info = vk::DescriptorBufferInfo::default()
+                .buffer(lights_buffers[i])
+                .offset(0)
+                .range(std::mem::size_of::<LightsUBO>() as u64);
 
-            unsafe { device.update_descriptor_sets(&[write], &[]) };
+            let writes = [
+                vk::WriteDescriptorSet::default()
+                    .dst_set(set)
+                    .dst_binding(0)
+                    .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                    .buffer_info(std::slice::from_ref(&scene_info)),
+                vk::WriteDescriptorSet::default()
+                    .dst_set(set)
+                    .dst_binding(1)
+                    .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                    .buffer_info(std::slice::from_ref(&lights_info)),
+            ];
+
+            unsafe { device.update_descriptor_sets(&writes, &[]) };
         }
 
         sets
+    }
+
+    fn create_lights_buffers(
+        instance:        &Instance,
+        physical_device: vk::PhysicalDevice,
+        device:          &Device,
+    ) -> (Vec<vk::Buffer>, Vec<vk::DeviceMemory>, Vec<*mut u8>) {
+        let size = std::mem::size_of::<LightsUBO>() as u64;
+        let mut buffers  = Vec::new();
+        let mut memories = Vec::new();
+        let mut ptrs     = Vec::new();
+
+        for _ in 0..MAX_FRAMES {
+            let (buf, mem) = Self::create_buffer(
+                instance, physical_device, device, size,
+                vk::BufferUsageFlags::UNIFORM_BUFFER,
+                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+            );
+            let ptr = unsafe {
+                device.map_memory(mem, 0, size, vk::MemoryMapFlags::empty()).unwrap() as *mut u8
+            };
+            buffers.push(buf);
+            memories.push(mem);
+            ptrs.push(ptr);
+        }
+
+        (buffers, memories, ptrs)
     }
 
     fn find_memory_type(
@@ -967,6 +1052,62 @@ impl Renderer {
         }
 
         result.unwrap_or_else(|| (Mat4::IDENTITY.to_cols_array_2d(), [0.0; 4]))
+    }
+
+    fn collect_lights(world: &brv_engine::World) -> LightsUBO {
+        let zero4 = [0.0f32; 4];
+        let mut ubo = LightsUBO {
+            counts:      [0; 4],
+            directional: std::array::from_fn(|_| GpuDirLight   { color_intensity: zero4, direction:     zero4 }),
+            point:       std::array::from_fn(|_| GpuPointLight  { color_intensity: zero4, position_range: zero4 }),
+            spot:        std::array::from_fn(|_| GpuSpotLight   { color_intensity: zero4, position_range: zero4, dir_cos_angle: zero4 }),
+            ambient:     zero4,
+        };
+
+        for obj in world.objects() {
+            let Some(light) = &obj.light else { continue };
+            match light {
+                brv_engine::Light::Directional(d) => {
+                    let i = ubo.counts[0] as usize;
+                    if i >= MAX_DIR_LIGHTS { continue; }
+                    let dir = obj.rotate.quat() * Vec3::Z;
+                    ubo.directional[i] = GpuDirLight {
+                        color_intensity: [d.color.r, d.color.g, d.color.b, d.intensity],
+                        direction:       [dir.x, dir.y, dir.z, 0.0],
+                    };
+                    ubo.counts[0] += 1;
+                }
+                brv_engine::Light::Point(p) => {
+                    let i = ubo.counts[1] as usize;
+                    if i >= MAX_POINT_LIGHTS { continue; }
+                    let pos = obj.transform.get();
+                    ubo.point[i] = GpuPointLight {
+                        color_intensity: [p.color.r, p.color.g, p.color.b, p.intensity],
+                        position_range:  [pos.x, pos.y, pos.z, p.range],
+                    };
+                    ubo.counts[1] += 1;
+                }
+                brv_engine::Light::Spot(s) => {
+                    let i = ubo.counts[2] as usize;
+                    if i >= MAX_SPOT_LIGHTS { continue; }
+                    let pos      = obj.transform.get();
+                    let dir      = obj.rotate.quat() * Vec3::Z;
+                    let cos_cut  = s.angle.to_radians().cos();
+                    ubo.spot[i] = GpuSpotLight {
+                        color_intensity: [s.color.r, s.color.g, s.color.b, s.intensity],
+                        position_range:  [pos.x, pos.y, pos.z, s.range],
+                        dir_cos_angle:   [dir.x, dir.y, dir.z, cos_cut],
+                    };
+                    ubo.counts[2] += 1;
+                }
+                brv_engine::Light::Ambient(a) => {
+                    ubo.ambient  = [a.color.r * a.intensity, a.color.g * a.intensity, a.color.b * a.intensity, 0.0];
+                    ubo.counts[3] = 1;
+                }
+            }
+        }
+
+        ubo
     }
 
     fn collect_draw_calls(&mut self, world: &brv_engine::World) -> Vec<DrawCall> {
@@ -1232,6 +1373,15 @@ impl brv_engine::RenderBackend for Renderer {
             );
         }
 
+        let lights_ubo = Self::collect_lights(world);
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                &lights_ubo as *const LightsUBO as *const u8,
+                self.lights_mapped[self.current_frame],
+                std::mem::size_of::<LightsUBO>(),
+            );
+        }
+
         unsafe {
             self.device
                 .wait_for_fences(&[self.in_flight[self.current_frame]], true, u64::MAX)
@@ -1324,6 +1474,9 @@ impl Drop for Renderer {
                 self.device.unmap_memory(self.uniform_memories[i]);
                 self.device.destroy_buffer(self.uniform_buffers[i], None);
                 self.device.free_memory(self.uniform_memories[i], None);
+                self.device.unmap_memory(self.lights_memories[i]);
+                self.device.destroy_buffer(self.lights_buffers[i], None);
+                self.device.free_memory(self.lights_memories[i], None);
             }
 
             for i in 0..MAX_FRAMES {
