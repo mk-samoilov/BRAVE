@@ -41,6 +41,10 @@ layout(set = 0, binding = 1) uniform LightsUBO {
     vec4           ambient_color;
 };
 
+layout(binding = 2) uniform sampler2D albedo_tex;
+layout(binding = 3) uniform sampler2D mr_tex;
+layout(binding = 4) uniform sampler2D normal_tex;
+
 layout(push_constant) uniform Push {
     mat4 model;
     vec4 albedo;
@@ -89,12 +93,32 @@ float point_attenuation(float dist, float range) {
     return pow(max(1.0 - nd * nd * nd * nd, 0.0), 2.0) / (dist * dist + 1.0);
 }
 
-void main() {
-    vec3  albedo_c = albedo.rgb;
-    float metallic  = mr.x;
-    float roughness = clamp(mr.y, 0.05, 1.0);
+mat3 cotangent_frame(vec3 N, vec3 pos, vec2 uv) {
+    vec3 dp1  = dFdx(pos);
+    vec3 dp2  = dFdy(pos);
+    vec2 duv1 = dFdx(uv);
+    vec2 duv2 = dFdy(uv);
+    vec3 dp2perp = cross(dp2, N);
+    vec3 dp1perp = cross(N, dp1);
+    vec3 T = dp2perp * duv1.x + dp1perp * duv2.x;
+    vec3 B = dp2perp * duv1.y + dp1perp * duv2.y;
+    float invmax = inversesqrt(max(dot(T, T), dot(B, B)));
+    return mat3(T * invmax, B * invmax, N);
+}
 
-    vec3 N  = normalize(frag_normal);
+void main() {
+    vec4 albedo_sample = texture(albedo_tex, frag_uv);
+    vec3 albedo_c = albedo.rgb * albedo_sample.rgb;
+
+    vec4  mr_sample = texture(mr_tex, frag_uv);
+    float metallic  = mr.x * mr_sample.b;
+    float roughness = clamp(mr.y * mr_sample.g, 0.05, 1.0);
+
+    vec3 Ng = normalize(frag_normal);
+    vec3 ts_normal = texture(normal_tex, frag_uv).rgb * 2.0 - 1.0;
+    mat3 TBN = cotangent_frame(Ng, frag_world_pos, frag_uv);
+    vec3 N = normalize(TBN * ts_normal);
+
     vec3 V  = normalize(camera_pos.xyz - frag_world_pos);
     vec3 F0 = mix(vec3(0.04), albedo_c, metallic);
 
@@ -149,5 +173,5 @@ void main() {
     color = color / (color + vec3(1.0));
     color = pow(color, vec3(1.0 / 2.2));
 
-    out_color = vec4(color, albedo.a);
+    out_color = vec4(color, albedo.a * albedo_sample.a);
 }

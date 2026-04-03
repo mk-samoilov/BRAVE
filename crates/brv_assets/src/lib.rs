@@ -33,24 +33,27 @@ pub struct TextureData {
     pub height: u32,
 }
 
+#[derive(Clone)]
 pub struct Material {
-    pub albedo:         Color,
-    pub metallic:       f32,
-    pub roughness:      f32,
-    pub emissive:       Color,
-    pub albedo_texture: Option<Arc<TextureData>>,
-    pub normal_texture: Option<Arc<TextureData>>,
+    pub albedo:                     Color,
+    pub metallic:                   f32,
+    pub roughness:                  f32,
+    pub emissive:                   Color,
+    pub albedo_texture:             Option<Arc<TextureData>>,
+    pub metallic_roughness_texture: Option<Arc<TextureData>>,
+    pub normal_texture:             Option<Arc<TextureData>>,
 }
 
 impl Default for Material {
     fn default() -> Self {
         Self {
-            albedo:         Color::WHITE,
-            metallic:       0.0,
-            roughness:      0.5,
-            emissive:       Color { r: 0.0, g: 0.0, b: 0.0, a: 0.0 },
-            albedo_texture: None,
-            normal_texture: None,
+            albedo:                     Color::WHITE,
+            metallic:                   0.0,
+            roughness:                  0.5,
+            emissive:                   Color { r: 0.0, g: 0.0, b: 0.0, a: 0.0 },
+            albedo_texture:             None,
+            metallic_roughness_texture: None,
+            normal_texture:             None,
         }
     }
 }
@@ -144,7 +147,7 @@ impl From<AssetData> for Arc<TextureData> {
 }
 
 enum CachedData {
-    Mesh(Arc<MeshData>),
+    Mesh(Arc<MeshData>, Material),
     Texture(Arc<TextureData>),
     Shader(Arc<Vec<u32>>),
 }
@@ -317,7 +320,7 @@ impl Assets {
                     let md = Arc::new(MeshData { vertices, indices });
                     let size = Self::mesh_size_bytes(&md);
                     log::info!("Mesh ready: \"{}\" ({} verts, {} idx, {} bytes)", path, vc, ic, size);
-                    (CachedData::Mesh(md), size)
+                    (CachedData::Mesh(md, Material::default()), size)
                 }
             }
         };
@@ -343,17 +346,19 @@ impl Assets {
             }
             AssetType::GLTFModel => {
                 log::debug!("Loading gltf: \"{}\"", full_path);
-                let md = Arc::new(gltf_loader::load_gltf(&full_path));
+                let (mesh_data, mat) = gltf_loader::load_gltf(&full_path);
+                let md = Arc::new(mesh_data);
                 let size = Self::mesh_size_bytes(&md);
                 log::info!("Mesh ready: \"{}\" ({} verts, {} idx, {} bytes)", path, md.vertices.len(), md.indices.len(), size);
-                (CachedData::Mesh(md), size)
+                (CachedData::Mesh(md, mat), size)
             }
             AssetType::GLBModel => {
                 log::debug!("Loading glb: \"{}\"", full_path);
-                let md = Arc::new(gltf_loader::load_glb(&full_path));
+                let (mesh_data, mat) = gltf_loader::load_glb(&full_path);
+                let md = Arc::new(mesh_data);
                 let size = Self::mesh_size_bytes(&md);
                 log::info!("Mesh ready: \"{}\" ({} verts, {} idx, {} bytes)", path, md.vertices.len(), md.indices.len(), size);
-                (CachedData::Mesh(md), size)
+                (CachedData::Mesh(md, mat), size)
             }
         };
 
@@ -376,9 +381,9 @@ impl Assets {
 
     fn make_asset_data(cached: &CachedData) -> AssetData {
         match cached {
-            CachedData::Mesh(md) => AssetData::Mesh(MeshComponent {
+            CachedData::Mesh(md, mat) => AssetData::Mesh(MeshComponent {
                 data:     Arc::clone(md),
-                material: Material::default(),
+                material: mat.clone(),
             }),
             CachedData::Texture(td) => AssetData::Texture(Arc::clone(td)),
             CachedData::Shader(spv) => AssetData::Shader(Arc::clone(spv)),
