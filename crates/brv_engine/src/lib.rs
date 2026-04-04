@@ -85,17 +85,13 @@ impl Engine {
     }
 
     pub fn run(mut self) {
-        let startup = std::mem::take(&mut self.startup_systems);
-        for system in startup {
-            system(&mut self);
-        }
-
         let event_loop = self.window
             .as_mut()
             .expect("WindowPlugin not loaded")
             .take_event_loop();
 
         let mut accumulator = 0.0f32;
+        let mut startup_done = false;
 
         let _ = event_loop.run(move |event, elwt| {
             match event {
@@ -122,6 +118,14 @@ impl Engine {
                     }
                 }
                 Event::AboutToWait => {
+                    if !startup_done {
+                        startup_done = true;
+                        let startup = std::mem::take(&mut self.startup_systems);
+                        for system in startup {
+                            system(&mut self);
+                        }
+                    }
+
                     let dt = self.time.tick();
                     accumulator += dt;
 

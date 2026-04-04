@@ -41,9 +41,10 @@ layout(set = 0, binding = 1) uniform LightsUBO {
     vec4           ambient_color;
 };
 
-layout(binding = 2) uniform sampler2D albedo_tex;
-layout(binding = 3) uniform sampler2D mr_tex;
-layout(binding = 4) uniform sampler2D normal_tex;
+layout(set = 0, binding = 2) uniform texture2D albedo_img;
+layout(set = 0, binding = 3) uniform texture2D mr_img;
+layout(set = 0, binding = 4) uniform texture2D normal_img;
+layout(set = 0, binding = 5) uniform sampler tex_sampler;
 
 layout(push_constant) uniform Push {
     mat4 model;
@@ -107,15 +108,15 @@ mat3 cotangent_frame(vec3 N, vec3 pos, vec2 uv) {
 }
 
 void main() {
-    vec4 albedo_sample = texture(albedo_tex, frag_uv);
+    vec4 albedo_sample = texture(sampler2D(albedo_img, tex_sampler), frag_uv);
     vec3 albedo_c = albedo.rgb * albedo_sample.rgb;
 
-    vec4  mr_sample = texture(mr_tex, frag_uv);
+    vec4  mr_sample = texture(sampler2D(mr_img, tex_sampler), frag_uv);
     float metallic  = mr.x * mr_sample.b;
     float roughness = clamp(mr.y * mr_sample.g, 0.05, 1.0);
 
     vec3 Ng = normalize(frag_normal);
-    vec3 ts_normal = texture(normal_tex, frag_uv).rgb * 2.0 - 1.0;
+    vec3 ts_normal = texture(sampler2D(normal_img, tex_sampler), frag_uv).rgb * 2.0 - 1.0;
     mat3 TBN = cotangent_frame(Ng, frag_world_pos, frag_uv);
     vec3 N = normalize(TBN * ts_normal);
 

@@ -6,6 +6,14 @@ use glam::{Mat4, Vec3};
 
 const MAX_FRAMES: usize = 2;
 
+struct PendingUpload {
+    staging_buffer: vk::Buffer,
+    staging_memory: vk::DeviceMemory,
+    dst_image:      vk::Image,
+    width:          u32,
+    height:         u32,
+}
+
 struct GpuMesh {
     vertex_buffer: vk::Buffer,
     vertex_memory: vk::DeviceMemory,
@@ -118,6 +126,8 @@ pub struct Renderer {
     default_white:    GpuTexture,
     default_mr:       GpuTexture,
     default_normal:   GpuTexture,
+    shared_sampler:   vk::Sampler,
+    pending_uploads:  Vec<PendingUpload>,
     #[cfg(debug_assertions)]
     debug_utils: ash::ext::debug_utils::Instance,
     #[cfg(debug_assertions)]
@@ -125,7 +135,7 @@ pub struct Renderer {
 }
 
 impl Renderer {
-    pub fn new(window: &Window, assets: &mut brv_assets::Assets) -> Self {
+    pub fn new(window: &Window, assets: &mut brv_assets::Assets, gpu_index: usize) -> Self {
         let entry = unsafe { ash::Entry::load().expect("Failed to load Vulkan") };
         let instance = Self::create_instance(&entry, window);
 
@@ -145,7 +155,7 @@ impl Renderer {
         };
 
         let (physical_device, graphics_family, present_family) =
-            Self::pick_physical_device(&instance, &surface_loader, surface);
+            Self::pick_physical_device(&instance, &surface_loader, surface, gpu_index);
 
         let device = Self::create_device(&instance, physical_device, graphics_family, present_family);
         let graphics_queue = unsafe { device.get_device_queue(graphics_family, 0) };
@@ -192,9 +202,27 @@ impl Renderer {
 
         let descriptor_pool = Self::create_scene_descriptor_pool(&device);
 
-        let default_white  = Self::upload_texture_static(&instance, physical_device, &device, command_pool, graphics_queue, &[255, 255, 255, 255], 1, 1, vk::Format::R8G8B8A8_SRGB);
-        let default_mr     = Self::upload_texture_static(&instance, physical_device, &device, command_pool, graphics_queue, &[255, 255, 255, 255], 1, 1, vk::Format::R8G8B8A8_UNORM);
-        let default_normal = Self::upload_texture_static(&instance, physical_device, &device, command_pool, graphics_queue, &[127, 127, 255, 255], 1, 1, vk::Format::R8G8B8A8_UNORM);
+        let mut init_pending = Vec::new();
+        let default_white  = Self::stage_texture(&instance, physical_device, &device, &mut init_pending, &[255, 255, 255, 255], 1, 1, vk::Format::R8G8B8A8_SRGB);
+        let default_mr     = Self::stage_texture(&instance, physical_device, &device, &mut init_pending, &[255, 255, 255, 255], 1, 1, vk::Format::R8G8B8A8_UNORM);
+        let default_normal = Self::stage_texture(&instance, physical_device, &device, &mut init_pending, &[127, 127, 255, 255], 1, 1, vk::Format::R8G8B8A8_UNORM);
+        Self::flush_pending_uploads(&device, command_pool, graphics_queue, &mut init_pending);
+
+        let shared_sampler = {
+            let info = vk::SamplerCreateInfo::default()
+                .mag_filter(vk::Filter::LINEAR)
+                .min_filter(vk::Filter::LINEAR)
+                .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
+                .address_mode_u(vk::SamplerAddressMode::REPEAT)
+                .address_mode_v(vk::SamplerAddressMode::REPEAT)
+                .address_mode_w(vk::SamplerAddressMode::REPEAT)
+                .anisotropy_enable(false)
+                .max_anisotropy(1.0)
+                .min_lod(0.0)
+                .max_lod(0.0)
+                .border_color(vk::BorderColor::INT_OPAQUE_BLACK);
+            unsafe { device.create_sampler(&info, None).unwrap() }
+        };
 
         log::info!(
             "Renderer initialized: {}x{}",
@@ -246,6 +274,8 @@ impl Renderer {
             default_white,
             default_mr,
             default_normal,
+            shared_sampler,
+            pending_uploads: Vec::new(),
             #[cfg(debug_assertions)]
             debug_utils,
             #[cfg(debug_assertions)]
@@ -310,23 +340,25 @@ impl Renderer {
     }
 
     fn pick_physical_device(
-        instance: &Instance,
+        instance:       &Instance,
         surface_loader: &ash::khr::surface::Instance,
-        surface: vk::SurfaceKHR,
+        surface:        vk::SurfaceKHR,
+        gpu_index:      usize,
     ) -> (vk::PhysicalDevice, u32, u32) {
         let devices = unsafe { instance.enumerate_physical_devices().unwrap() };
-        for device in devices {
-            if let Some((gfx, prs)) =
-                Self::check_device(instance, device, surface_loader, surface)
-            {
-                let props = unsafe { instance.get_physical_device_properties(device) };
-                let name =
-                    unsafe { std::ffi::CStr::from_ptr(props.device_name.as_ptr()) }.to_string_lossy();
-                log::info!("Using GPU: {}", name);
-                return (device, gfx, prs);
-            }
-        }
-        panic!("No suitable Vulkan GPU found");
+
+        let suitable: Vec<_> = devices.into_iter()
+            .filter_map(|d| Self::check_device(instance, d, surface_loader, surface).map(|(g, p)| (d, g, p)))
+            .collect();
+
+        let (device, gfx, prs) = suitable.into_iter().nth(gpu_index)
+            .unwrap_or_else(|| panic!("GPU index {} not found", gpu_index));
+
+        let props = unsafe { instance.get_physical_device_properties(device) };
+        let name = unsafe { std::ffi::CStr::from_ptr(props.device_name.as_ptr()) }.to_string_lossy();
+        log::info!("Using GPU {}: {}", gpu_index, name);
+
+        (device, gfx, prs)
     }
 
     fn check_device(
@@ -632,17 +664,22 @@ impl Renderer {
                 .stage_flags(vk::ShaderStageFlags::FRAGMENT),
             vk::DescriptorSetLayoutBinding::default()
                 .binding(2)
-                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
                 .descriptor_count(1)
                 .stage_flags(vk::ShaderStageFlags::FRAGMENT),
             vk::DescriptorSetLayoutBinding::default()
                 .binding(3)
-                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
                 .descriptor_count(1)
                 .stage_flags(vk::ShaderStageFlags::FRAGMENT),
             vk::DescriptorSetLayoutBinding::default()
                 .binding(4)
-                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(5)
+                .descriptor_type(vk::DescriptorType::SAMPLER)
                 .descriptor_count(1)
                 .stage_flags(vk::ShaderStageFlags::FRAGMENT),
         ];
@@ -650,38 +687,11 @@ impl Renderer {
         unsafe { device.create_descriptor_set_layout(&info, None).unwrap() }
     }
 
-    fn begin_single_time_cmd(device: &Device, pool: vk::CommandPool) -> vk::CommandBuffer {
-        let alloc_info = vk::CommandBufferAllocateInfo::default()
-            .command_pool(pool)
-            .level(vk::CommandBufferLevel::PRIMARY)
-            .command_buffer_count(1);
-        let cmd = unsafe { device.allocate_command_buffers(&alloc_info).unwrap()[0] };
-        unsafe {
-            device.begin_command_buffer(
-                cmd,
-                &vk::CommandBufferBeginInfo::default()
-                    .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
-            ).unwrap();
-        }
-        cmd
-    }
-
-    fn end_single_time_cmd(device: &Device, pool: vk::CommandPool, queue: vk::Queue, cmd: vk::CommandBuffer) {
-        unsafe {
-            device.end_command_buffer(cmd).unwrap();
-            let submit = vk::SubmitInfo::default().command_buffers(std::slice::from_ref(&cmd));
-            device.queue_submit(queue, &[submit], vk::Fence::null()).unwrap();
-            device.queue_wait_idle(queue).unwrap();
-            device.free_command_buffers(pool, &[cmd]);
-        }
-    }
-
-    fn upload_texture_static(
+    fn stage_texture(
         instance:        &Instance,
         physical_device: vk::PhysicalDevice,
         device:          &Device,
-        pool:            vk::CommandPool,
-        queue:           vk::Queue,
+        pending:         &mut Vec<PendingUpload>,
         pixels:          &[u8],
         width:           u32,
         height:          u32,
@@ -717,11 +727,14 @@ impl Renderer {
             instance, physical_device, mem_reqs.memory_type_bits,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         );
-        let alloc_info = vk::MemoryAllocateInfo::default()
-            .allocation_size(mem_reqs.size)
-            .memory_type_index(mem_type);
-        let memory = unsafe { device.allocate_memory(&alloc_info, None).unwrap() };
-        unsafe { device.bind_image_memory(image, memory, 0).unwrap() };
+        let memory = unsafe {
+            let alloc = vk::MemoryAllocateInfo::default()
+                .allocation_size(mem_reqs.size)
+                .memory_type_index(mem_type);
+            let m = device.allocate_memory(&alloc, None).unwrap();
+            device.bind_image_memory(image, m, 0).unwrap();
+            m
+        };
 
         let sub = vk::ImageSubresourceRange {
             aspect_mask:      vk::ImageAspectFlags::COLOR,
@@ -731,135 +744,161 @@ impl Renderer {
             layer_count:      1,
         };
 
-        let cmd = Self::begin_single_time_cmd(device, pool);
-        unsafe {
-            let barrier = vk::ImageMemoryBarrier::default()
-                .old_layout(vk::ImageLayout::UNDEFINED)
-                .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
-                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .image(image)
-                .subresource_range(sub)
-                .src_access_mask(vk::AccessFlags::empty())
-                .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE);
-            device.cmd_pipeline_barrier(
-                cmd,
-                vk::PipelineStageFlags::TOP_OF_PIPE,
-                vk::PipelineStageFlags::TRANSFER,
-                vk::DependencyFlags::empty(),
-                &[], &[], &[barrier],
-            );
+        let view = unsafe {
+            device.create_image_view(
+                &vk::ImageViewCreateInfo::default()
+                    .image(image)
+                    .view_type(vk::ImageViewType::TYPE_2D)
+                    .format(format)
+                    .subresource_range(sub),
+                None,
+            ).unwrap()
+        };
 
-            let region = vk::BufferImageCopy::default()
-                .image_subresource(vk::ImageSubresourceLayers {
-                    aspect_mask:      vk::ImageAspectFlags::COLOR,
-                    mip_level:        0,
-                    base_array_layer: 0,
-                    layer_count:      1,
-                })
-                .image_extent(vk::Extent3D { width, height, depth: 1 });
-            device.cmd_copy_buffer_to_image(
-                cmd, staging, image,
-                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                &[region],
-            );
+        let sampler = unsafe {
+            device.create_sampler(
+                &vk::SamplerCreateInfo::default()
+                    .mag_filter(vk::Filter::LINEAR)
+                    .min_filter(vk::Filter::LINEAR)
+                    .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
+                    .address_mode_u(vk::SamplerAddressMode::REPEAT)
+                    .address_mode_v(vk::SamplerAddressMode::REPEAT)
+                    .address_mode_w(vk::SamplerAddressMode::REPEAT)
+                    .anisotropy_enable(false)
+                    .max_anisotropy(1.0)
+                    .min_lod(0.0)
+                    .max_lod(0.0)
+                    .border_color(vk::BorderColor::INT_OPAQUE_BLACK),
+                None,
+            ).unwrap()
+        };
 
-            let barrier2 = vk::ImageMemoryBarrier::default()
-                .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
-                .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .image(image)
-                .subresource_range(sub)
-                .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
-                .dst_access_mask(vk::AccessFlags::SHADER_READ);
-            device.cmd_pipeline_barrier(
-                cmd,
-                vk::PipelineStageFlags::TRANSFER,
-                vk::PipelineStageFlags::FRAGMENT_SHADER,
-                vk::DependencyFlags::empty(),
-                &[], &[], &[barrier2],
-            );
-        }
-        Self::end_single_time_cmd(device, pool, queue, cmd);
-
-        unsafe {
-            device.destroy_buffer(staging, None);
-            device.free_memory(staging_mem, None);
-        }
-
-        let view_info = vk::ImageViewCreateInfo::default()
-            .image(image)
-            .view_type(vk::ImageViewType::TYPE_2D)
-            .format(format)
-            .subresource_range(sub);
-        let view = unsafe { device.create_image_view(&view_info, None).unwrap() };
-
-        let sampler_info = vk::SamplerCreateInfo::default()
-            .mag_filter(vk::Filter::LINEAR)
-            .min_filter(vk::Filter::LINEAR)
-            .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
-            .address_mode_u(vk::SamplerAddressMode::REPEAT)
-            .address_mode_v(vk::SamplerAddressMode::REPEAT)
-            .address_mode_w(vk::SamplerAddressMode::REPEAT)
-            .anisotropy_enable(false)
-            .max_anisotropy(1.0)
-            .min_lod(0.0)
-            .max_lod(0.0)
-            .border_color(vk::BorderColor::INT_OPAQUE_BLACK);
-        let sampler = unsafe { device.create_sampler(&sampler_info, None).unwrap() };
+        pending.push(PendingUpload { staging_buffer: staging, staging_memory: staging_mem, dst_image: image, width, height });
 
         GpuTexture { image, memory, view, sampler }
     }
 
-    fn get_or_upload_tex(
-        instance:        &Instance,
-        physical_device: vk::PhysicalDevice,
-        device:          &Device,
-        pool:            vk::CommandPool,
-        queue:           vk::Queue,
-        texture_cache:   &mut HashMap<usize, GpuTexture>,
-        tex:             &std::sync::Arc<brv_assets::TextureData>,
-        format:          vk::Format,
-    ) -> usize {
-        let key = std::sync::Arc::as_ptr(tex) as usize;
-        if !texture_cache.contains_key(&key) {
-            let gpu = Self::upload_texture_static(
-                instance, physical_device, device, pool, queue,
-                &tex.pixels, tex.width, tex.height, format,
-            );
-            texture_cache.insert(key, gpu);
+    fn flush_pending_uploads(
+        device:  &Device,
+        pool:    vk::CommandPool,
+        queue:   vk::Queue,
+        pending: &mut Vec<PendingUpload>,
+    ) {
+        if pending.is_empty() { return; }
+
+        let sub = vk::ImageSubresourceRange {
+            aspect_mask:      vk::ImageAspectFlags::COLOR,
+            base_mip_level:   0,
+            level_count:      1,
+            base_array_layer: 0,
+            layer_count:      1,
+        };
+
+        let cmd = unsafe {
+            let alloc = vk::CommandBufferAllocateInfo::default()
+                .command_pool(pool)
+                .level(vk::CommandBufferLevel::PRIMARY)
+                .command_buffer_count(1);
+            let cmd = device.allocate_command_buffers(&alloc).unwrap()[0];
+            device.begin_command_buffer(cmd, &vk::CommandBufferBeginInfo::default()
+                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)).unwrap();
+            cmd
+        };
+
+        unsafe {
+            let to_transfer: Vec<_> = pending.iter().map(|u| {
+                vk::ImageMemoryBarrier::default()
+                    .old_layout(vk::ImageLayout::UNDEFINED)
+                    .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+                    .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .image(u.dst_image)
+                    .subresource_range(sub)
+                    .src_access_mask(vk::AccessFlags::empty())
+                    .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+            }).collect();
+            device.cmd_pipeline_barrier(cmd,
+                vk::PipelineStageFlags::TOP_OF_PIPE,
+                vk::PipelineStageFlags::TRANSFER,
+                vk::DependencyFlags::empty(), &[], &[], &to_transfer);
+
+            for u in pending.iter() {
+                let region = vk::BufferImageCopy::default()
+                    .image_subresource(vk::ImageSubresourceLayers {
+                        aspect_mask:      vk::ImageAspectFlags::COLOR,
+                        mip_level:        0,
+                        base_array_layer: 0,
+                        layer_count:      1,
+                    })
+                    .image_extent(vk::Extent3D { width: u.width, height: u.height, depth: 1 });
+                device.cmd_copy_buffer_to_image(cmd, u.staging_buffer, u.dst_image,
+                    vk::ImageLayout::TRANSFER_DST_OPTIMAL, &[region]);
+            }
+
+            let to_shader: Vec<_> = pending.iter().map(|u| {
+                vk::ImageMemoryBarrier::default()
+                    .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+                    .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                    .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .image(u.dst_image)
+                    .subresource_range(sub)
+                    .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+                    .dst_access_mask(vk::AccessFlags::SHADER_READ)
+            }).collect();
+            device.cmd_pipeline_barrier(cmd,
+                vk::PipelineStageFlags::TRANSFER,
+                vk::PipelineStageFlags::FRAGMENT_SHADER,
+                vk::DependencyFlags::empty(), &[], &[], &to_shader);
+
+            device.end_command_buffer(cmd).unwrap();
+
+            let fence = device.create_fence(&vk::FenceCreateInfo::default(), None).unwrap();
+            device.queue_submit(queue, &[vk::SubmitInfo::default().command_buffers(std::slice::from_ref(&cmd))], fence).unwrap();
+            device.wait_for_fences(&[fence], true, u64::MAX).unwrap();
+            device.destroy_fence(fence, None);
+            device.free_command_buffers(pool, &[cmd]);
+
+            for u in pending.drain(..) {
+                device.destroy_buffer(u.staging_buffer, None);
+                device.free_memory(u.staging_memory, None);
+            }
         }
-        key
+    }
+
+    fn ensure_tex_staged(
+        &mut self,
+        tex:    &std::sync::Arc<brv_assets::TextureData>,
+        format: vk::Format,
+    ) {
+        let key = std::sync::Arc::as_ptr(tex) as usize;
+        if self.texture_cache.contains_key(&key) { return; }
+        let gpu = Self::stage_texture(
+            &self.instance, self.physical_device, &self.device,
+            &mut self.pending_uploads,
+            &tex.pixels, tex.width, tex.height, format,
+        );
+        self.texture_cache.insert(key, gpu);
     }
 
     fn get_or_create_mat_set(
-        instance:        &Instance,
-        physical_device: vk::PhysicalDevice,
-        device:          &Device,
-        cmd_pool:        vk::CommandPool,
-        queue:           vk::Queue,
-        desc_pool:       vk::DescriptorPool,
-        desc_layout:     vk::DescriptorSetLayout,
-        uniform_buffer:  vk::Buffer,
-        lights_buffer:   vk::Buffer,
-        texture_cache:   &mut HashMap<usize, GpuTexture>,
-        mat_set_cache:   &mut HashMap<(usize, usize, usize, usize), vk::DescriptorSet>,
-        default_white:   &GpuTexture,
-        default_mr:      &GpuTexture,
-        default_normal:  &GpuTexture,
-        material:        &brv_engine::Material,
-        frame:           usize,
+        device:         &Device,
+        desc_pool:      vk::DescriptorPool,
+        desc_layout:    vk::DescriptorSetLayout,
+        uniform_buffer: vk::Buffer,
+        lights_buffer:  vk::Buffer,
+        texture_cache:  &HashMap<usize, GpuTexture>,
+        mat_set_cache:  &mut HashMap<(usize, usize, usize, usize), vk::DescriptorSet>,
+        default_white:  &GpuTexture,
+        default_mr:     &GpuTexture,
+        default_normal: &GpuTexture,
+        shared_sampler: vk::Sampler,
+        material:       &brv_engine::Material,
+        frame:          usize,
     ) -> vk::DescriptorSet {
-        let ak = material.albedo_texture.as_ref().map(|t| {
-            Self::get_or_upload_tex(instance, physical_device, device, cmd_pool, queue, texture_cache, t, vk::Format::R8G8B8A8_SRGB)
-        }).unwrap_or(0);
-        let mk = material.metallic_roughness_texture.as_ref().map(|t| {
-            Self::get_or_upload_tex(instance, physical_device, device, cmd_pool, queue, texture_cache, t, vk::Format::R8G8B8A8_UNORM)
-        }).unwrap_or(0);
-        let nk = material.normal_texture.as_ref().map(|t| {
-            Self::get_or_upload_tex(instance, physical_device, device, cmd_pool, queue, texture_cache, t, vk::Format::R8G8B8A8_UNORM)
-        }).unwrap_or(0);
+        let ak = material.albedo_texture.as_ref().map(|t| std::sync::Arc::as_ptr(t) as usize).unwrap_or(0);
+        let mk = material.metallic_roughness_texture.as_ref().map(|t| std::sync::Arc::as_ptr(t) as usize).unwrap_or(0);
+        let nk = material.normal_texture.as_ref().map(|t| std::sync::Arc::as_ptr(t) as usize).unwrap_or(0);
 
         let cache_key = (frame, ak, mk, nk);
         if let Some(&set) = mat_set_cache.get(&cache_key) {
@@ -871,18 +910,11 @@ impl Renderer {
             .set_layouts(std::slice::from_ref(&desc_layout));
         let set = unsafe { device.allocate_descriptor_sets(&alloc_info).unwrap()[0] };
 
-        let av = if ak != 0 { texture_cache[&ak].view }    else { default_white.view };
-        let mv = if mk != 0 { texture_cache[&mk].view }    else { default_mr.view };
-        let nv = if nk != 0 { texture_cache[&nk].view }    else { default_normal.view };
-        let as_ = if ak != 0 { texture_cache[&ak].sampler } else { default_white.sampler };
-        let ms  = if mk != 0 { texture_cache[&mk].sampler } else { default_mr.sampler };
-        let ns  = if nk != 0 { texture_cache[&nk].sampler } else { default_normal.sampler };
+        let av = if ak != 0 { texture_cache[&ak].view } else { default_white.view };
+        let mv = if mk != 0 { texture_cache[&mk].view } else { default_mr.view };
+        let nv = if nk != 0 { texture_cache[&nk].view } else { default_normal.view };
 
-        Self::write_descriptor_set(
-            device, set,
-            uniform_buffer, lights_buffer,
-            av, as_, mv, ms, nv, ns,
-        );
+        Self::write_descriptor_set(device, set, uniform_buffer, lights_buffer, av, mv, nv, shared_sampler);
 
         mat_set_cache.insert(cache_key, set);
         set
@@ -1120,8 +1152,11 @@ impl Renderer {
                 .ty(vk::DescriptorType::UNIFORM_BUFFER)
                 .descriptor_count(2 * MAX_MATS),
             vk::DescriptorPoolSize::default()
-                .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .ty(vk::DescriptorType::SAMPLED_IMAGE)
                 .descriptor_count(3 * MAX_MATS),
+            vk::DescriptorPoolSize::default()
+                .ty(vk::DescriptorType::SAMPLER)
+                .descriptor_count(MAX_MATS),
         ];
         let info = vk::DescriptorPoolCreateInfo::default()
             .pool_sizes(&pool_sizes)
@@ -1135,11 +1170,9 @@ impl Renderer {
         uniform_buffer:  vk::Buffer,
         lights_buffer:   vk::Buffer,
         albedo_view:     vk::ImageView,
-        albedo_sampler:  vk::Sampler,
         mr_view:         vk::ImageView,
-        mr_sampler:      vk::Sampler,
         normal_view:     vk::ImageView,
-        normal_sampler:  vk::Sampler,
+        shared_sampler:  vk::Sampler,
     ) {
         let scene_info = vk::DescriptorBufferInfo::default()
             .buffer(uniform_buffer)
@@ -1151,13 +1184,15 @@ impl Renderer {
             .range(std::mem::size_of::<LightsUBO>() as u64);
         let albedo_img = vk::DescriptorImageInfo::default()
             .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-            .image_view(albedo_view).sampler(albedo_sampler);
+            .image_view(albedo_view);
         let mr_img = vk::DescriptorImageInfo::default()
             .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-            .image_view(mr_view).sampler(mr_sampler);
+            .image_view(mr_view);
         let normal_img = vk::DescriptorImageInfo::default()
             .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-            .image_view(normal_view).sampler(normal_sampler);
+            .image_view(normal_view);
+        let sampler_info = vk::DescriptorImageInfo::default()
+            .sampler(shared_sampler);
         let writes = [
             vk::WriteDescriptorSet::default().dst_set(set).dst_binding(0)
                 .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
@@ -1166,14 +1201,17 @@ impl Renderer {
                 .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
                 .buffer_info(std::slice::from_ref(&lights_info)),
             vk::WriteDescriptorSet::default().dst_set(set).dst_binding(2)
-                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
                 .image_info(std::slice::from_ref(&albedo_img)),
             vk::WriteDescriptorSet::default().dst_set(set).dst_binding(3)
-                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
                 .image_info(std::slice::from_ref(&mr_img)),
             vk::WriteDescriptorSet::default().dst_set(set).dst_binding(4)
-                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
                 .image_info(std::slice::from_ref(&normal_img)),
+            vk::WriteDescriptorSet::default().dst_set(set).dst_binding(5)
+                .descriptor_type(vk::DescriptorType::SAMPLER)
+                .image_info(std::slice::from_ref(&sampler_info)),
         ];
         unsafe { device.update_descriptor_sets(&writes, &[]) };
     }
@@ -1390,50 +1428,52 @@ impl Renderer {
     }
 
     fn collect_draw_calls(&mut self, world: &brv_engine::World) -> Vec<DrawCall> {
-        let mut calls = Vec::new();
-
         for obj in world.objects() {
-            if !obj.visible.get() {
-                continue;
+            if !obj.visible.get() { continue; }
+            if let Some(mesh) = &obj.mesh {
+                let mat = &mesh.material;
+                if let Some(t) = &mat.albedo_texture {
+                    self.ensure_tex_staged(t, vk::Format::R8G8B8A8_SRGB);
+                }
+                if let Some(t) = &mat.metallic_roughness_texture {
+                    self.ensure_tex_staged(t, vk::Format::R8G8B8A8_UNORM);
+                }
+                if let Some(t) = &mat.normal_texture {
+                    self.ensure_tex_staged(t, vk::Format::R8G8B8A8_UNORM);
+                }
             }
+        }
+        Self::flush_pending_uploads(&self.device, self.command_pool, self.graphics_queue, &mut self.pending_uploads);
+
+        let mut calls = Vec::new();
+        for obj in world.objects() {
+            if !obj.visible.get() { continue; }
             if let Some(mesh) = &obj.mesh {
                 let key = std::sync::Arc::as_ptr(&mesh.data) as usize;
-
                 if !self.mesh_cache.contains_key(&key) {
-                    let gpu_mesh = Self::upload_mesh(
-                        &self.instance,
-                        self.physical_device,
-                        &self.device,
-                        mesh,
-                    );
+                    let gpu_mesh = Self::upload_mesh(&self.instance, self.physical_device, &self.device, mesh);
                     self.mesh_cache.insert(key, gpu_mesh);
                 }
 
                 let pos   = obj.transform.get();
                 let rot   = obj.rotate.quat();
                 let scale = obj.transform.get_scale();
-                let model = (Mat4::from_translation(pos)
-                    * Mat4::from_quat(rot)
-                    * Mat4::from_scale(scale))
-                    .to_cols_array_2d();
+                let model = (Mat4::from_translation(pos) * Mat4::from_quat(rot) * Mat4::from_scale(scale)).to_cols_array_2d();
 
                 let mat   = &mesh.material;
                 let frame = self.current_frame;
                 let tex_set = Self::get_or_create_mat_set(
-                    &self.instance,
-                    self.physical_device,
                     &self.device,
-                    self.command_pool,
-                    self.graphics_queue,
                     self.descriptor_pool,
                     self.descriptor_set_layout,
                     self.uniform_buffers[frame],
                     self.lights_buffers[frame],
-                    &mut self.texture_cache,
+                    &self.texture_cache,
                     &mut self.mat_set_cache,
                     &self.default_white,
                     &self.default_mr,
                     &self.default_normal,
+                    self.shared_sampler,
                     mat,
                     frame,
                 );
@@ -1447,7 +1487,6 @@ impl Renderer {
                 });
             }
         }
-
         calls
     }
 
@@ -1777,6 +1816,7 @@ impl Drop for Renderer {
                 self.device.destroy_image(tex.image, None);
             }
 
+            self.device.destroy_sampler(self.shared_sampler, None);
             self.device.destroy_descriptor_pool(self.descriptor_pool, None);
 
             for i in 0..MAX_FRAMES {

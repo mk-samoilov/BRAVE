@@ -9,7 +9,7 @@ fn main() {
     game.add_plugin(WindowPlugin { title: "My BRAVE Game", width: 1920, height: 1080 });
     game.add_plugin(InputPlugin);
     game.add_plugin(AssetPlugin::new("assets/"));
-    game.add_plugin(RenderPlugin);
+    game.add_plugin(RenderPlugin { gpu_index: 1 });
 
     game.add_startup_system(game::setup);
     game.add_system(game::update);
