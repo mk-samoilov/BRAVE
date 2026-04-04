@@ -71,8 +71,11 @@ fn make_cube() -> MeshComponent {
         [-1.0,  0.0,  0.0], [-1.0,  0.0,  0.0], [-1.0,  0.0,  0.0], [-1.0,  0.0,  0.0],
     ];
 
+    let face_uvs: &[[f32; 2]] = &[
+        [0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0],
+    ];
     let vertices: Vec<Vertex> = (0..24)
-        .map(|i| Vertex { position: positions[i], normal: normals[i], uv: [0.0, 0.0] })
+        .map(|i| Vertex { position: positions[i], normal: normals[i], uv: face_uvs[i % 4] })
         .collect();
 
     let indices: Vec<u32> = (0..6u32)

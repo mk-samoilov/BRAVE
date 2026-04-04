@@ -317,10 +317,12 @@ impl Assets {
                         let b = &raw[idx_start + i*4..idx_start + i*4 + 4];
                         indices.push(u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
                     }
+                    let mut off = idx_start + ic * 4;
+                    let mat = Self::read_material_from_blob(&raw, &mut off);
                     let md = Arc::new(MeshData { vertices, indices });
                     let size = Self::mesh_size_bytes(&md);
                     log::info!("Mesh ready: \"{}\" ({} verts, {} idx, {} bytes)", path, vc, ic, size);
-                    (CachedData::Mesh(md, Material::default()), size)
+                    (CachedData::Mesh(md, mat), size)
                 }
             }
         };
@@ -387,6 +389,48 @@ impl Assets {
             }),
             CachedData::Texture(td) => AssetData::Texture(Arc::clone(td)),
             CachedData::Shader(spv) => AssetData::Shader(Arc::clone(spv)),
+        }
+    }
+
+    #[cfg(not(debug_assertions))]
+    fn read_material_from_blob(raw: &[u8], off: &mut usize) -> Material {
+        let read_f32 = |raw: &[u8], off: &mut usize| -> f32 {
+            let v = f32::from_le_bytes([raw[*off], raw[*off+1], raw[*off+2], raw[*off+3]]);
+            *off += 4;
+            v
+        };
+        let read_tex = |raw: &[u8], off: &mut usize| -> Option<Arc<TextureData>> {
+            let has = raw[*off]; *off += 1;
+            if has == 1 {
+                let w = u32::from_le_bytes([raw[*off], raw[*off+1], raw[*off+2], raw[*off+3]]); *off += 4;
+                let h = u32::from_le_bytes([raw[*off], raw[*off+1], raw[*off+2], raw[*off+3]]); *off += 4;
+                let size = (w * h * 4) as usize;
+                let pixels = raw[*off..*off+size].to_vec(); *off += size;
+                Some(Arc::new(TextureData { pixels, width: w, height: h }))
+            } else {
+                None
+            }
+        };
+        let r = read_f32(raw, off);
+        let g = read_f32(raw, off);
+        let b = read_f32(raw, off);
+        let a = read_f32(raw, off);
+        let metallic  = read_f32(raw, off);
+        let roughness = read_f32(raw, off);
+        let er = read_f32(raw, off);
+        let eg = read_f32(raw, off);
+        let eb = read_f32(raw, off);
+        let albedo_texture             = read_tex(raw, off);
+        let metallic_roughness_texture = read_tex(raw, off);
+        let normal_texture             = read_tex(raw, off);
+        Material {
+            albedo:    brv_colors::Color { r, g, b, a },
+            metallic,
+            roughness,
+            emissive:  brv_colors::Color { r: er, g: eg, b: eb, a: 1.0 },
+            albedo_texture,
+            metallic_roughness_texture,
+            normal_texture,
         }
     }
 

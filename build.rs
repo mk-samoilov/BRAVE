@@ -177,22 +177,72 @@ fn compile_image(path: &Path) -> Vec<u8> {
     out
 }
 
+struct MaterialRaw {
+    albedo:    [f32; 4],
+    metallic:  f32,
+    roughness: f32,
+    emissive:  [f32; 3],
+    albedo_tex:  Option<(u32, u32, Vec<u8>)>,
+    mr_tex:      Option<(u32, u32, Vec<u8>)>,
+    normal_tex:  Option<(u32, u32, Vec<u8>)>,
+}
+
+impl Default for MaterialRaw {
+    fn default() -> Self {
+        Self {
+            albedo:    [1.0, 1.0, 1.0, 1.0],
+            metallic:  0.0,
+            roughness: 0.5,
+            emissive:  [0.0, 0.0, 0.0],
+            albedo_tex:  None,
+            mr_tex:      None,
+            normal_tex:  None,
+        }
+    }
+}
+
+fn to_rgba8(data: &gltf::image::Data) -> (u32, u32, Vec<u8>) {
+    use gltf::image::Format;
+    let pixels = match data.format {
+        Format::R8G8B8A8 => data.pixels.clone(),
+        Format::R8G8B8   => data.pixels.chunks(3)
+            .flat_map(|c| [c[0], c[1], c[2], 255u8])
+            .collect(),
+        _ => vec![255u8; (data.width * data.height * 4) as usize],
+    };
+    (data.width, data.height, pixels)
+}
+
+fn write_optional_tex(out: &mut Vec<u8>, tex: &Option<(u32, u32, Vec<u8>)>) {
+    match tex {
+        Some((w, h, pixels)) => {
+            out.push(1u8);
+            out.extend_from_slice(&w.to_le_bytes());
+            out.extend_from_slice(&h.to_le_bytes());
+            out.extend_from_slice(pixels);
+        }
+        None => out.push(0u8),
+    }
+}
+
 fn compile_mesh(path: &Path) -> Vec<u8> {
-    let (doc, buffers, _) = gltf::import(path)
+    let (doc, buffers, images) = gltf::import(path)
         .unwrap_or_else(|e| panic!("Failed to load GLTF {:?}: {}", path, e));
 
     let mut positions_all: Vec<[f32; 3]> = Vec::new();
     let mut normals_all: Vec<[f32; 3]> = Vec::new();
     let mut uvs_all: Vec<[f32; 2]> = Vec::new();
     let mut indices_all: Vec<u32> = Vec::new();
+    let mut material = MaterialRaw::default();
 
     let scene = doc.default_scene().or_else(|| doc.scenes().next())
         .unwrap_or_else(|| panic!("GLTF has no scene: {:?}", path));
 
     for node in scene.nodes() {
         collect_node_mesh(
-            &node, glam::Mat4::IDENTITY, &buffers,
+            &node, glam::Mat4::IDENTITY, &buffers, &images,
             &mut positions_all, &mut normals_all, &mut uvs_all, &mut indices_all,
+            &mut material,
         );
     }
 
@@ -210,6 +260,15 @@ fn compile_mesh(path: &Path) -> Vec<u8> {
     for idx in &indices_all {
         out.extend_from_slice(&idx.to_le_bytes());
     }
+
+    for f in material.albedo    { out.extend_from_slice(&f.to_le_bytes()); }
+    out.extend_from_slice(&material.metallic.to_le_bytes());
+    out.extend_from_slice(&material.roughness.to_le_bytes());
+    for f in material.emissive  { out.extend_from_slice(&f.to_le_bytes()); }
+    write_optional_tex(&mut out, &material.albedo_tex);
+    write_optional_tex(&mut out, &material.mr_tex);
+    write_optional_tex(&mut out, &material.normal_tex);
+
     out
 }
 
@@ -217,10 +276,12 @@ fn collect_node_mesh(
     node:             &gltf::Node,
     parent_transform: Mat4,
     buffers:          &[gltf::buffer::Data],
+    images:           &[gltf::image::Data],
     positions_all:    &mut Vec<[f32; 3]>,
     normals_all:      &mut Vec<[f32; 3]>,
     uvs_all:          &mut Vec<[f32; 2]>,
     indices_all:      &mut Vec<u32>,
+    material:         &mut MaterialRaw,
 ) {
     let local      = Mat4::from_cols_array_2d(&node.transform().matrix());
     let global     = parent_transform * local;
@@ -229,6 +290,22 @@ fn collect_node_mesh(
     if let Some(mesh) = node.mesh() {
         for prim in mesh.primitives() {
             let reader = prim.reader(|buf| Some(&buffers[buf.index()]));
+
+            let pbr = prim.material().pbr_metallic_roughness();
+            let [r, g, b, a] = pbr.base_color_factor();
+            let [er, eg, eb] = prim.material().emissive_factor();
+            *material = MaterialRaw {
+                albedo:    [r, g, b, a],
+                metallic:  pbr.metallic_factor(),
+                roughness: pbr.roughness_factor(),
+                emissive:  [er, eg, eb],
+                albedo_tex: pbr.base_color_texture()
+                    .map(|t| to_rgba8(&images[t.texture().source().index()])),
+                mr_tex: pbr.metallic_roughness_texture()
+                    .map(|t| to_rgba8(&images[t.texture().source().index()])),
+                normal_tex: prim.material().normal_texture()
+                    .map(|t| to_rgba8(&images[t.texture().source().index()])),
+            };
 
             let positions: Vec<[f32; 3]> = reader.read_positions()
                 .unwrap_or_else(|| panic!("GLTF missing positions"))
@@ -263,7 +340,7 @@ fn collect_node_mesh(
     }
 
     for child in node.children() {
-        collect_node_mesh(&child, global, buffers, positions_all, normals_all, uvs_all, indices_all);
+        collect_node_mesh(&child, global, buffers, images, positions_all, normals_all, uvs_all, indices_all, material);
     }
 }
 
