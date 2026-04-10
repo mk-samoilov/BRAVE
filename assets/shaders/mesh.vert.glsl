@@ -7,6 +7,7 @@ layout(location = 2) in vec2 in_uv;
 layout(set = 0, binding = 0) uniform SceneUBO {
     mat4 view_proj;
     vec4 camera_pos;
+    vec4 camera_dir;
 };
 
 layout(push_constant) uniform Push {

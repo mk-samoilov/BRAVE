@@ -1,5 +1,6 @@
 mod game;
 mod camera;
+mod base_meshes;
 
 use brv_core::prelude::*;
 

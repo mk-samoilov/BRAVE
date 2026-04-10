@@ -78,6 +78,6 @@ pub fn update(obj: &mut Object, game: &mut Engine) {
         VEL_Z.with(|v| v.get()),
     );
 
-    let pos = obj.transform.get() + vel * dt;
-    obj.transform.set(pos.x, pos.y, pos.z);
+    let pos = obj.transform.get_pos() + vel * dt;
+    obj.transform.set_pos(pos.x, pos.y, pos.z);
 }

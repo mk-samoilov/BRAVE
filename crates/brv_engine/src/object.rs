@@ -29,11 +29,11 @@ impl TransformField {
         }
     }
 
-    pub fn set(&mut self, x: f32, y: f32, z: f32) {
+    pub fn set_pos(&mut self, x: f32, y: f32, z: f32) {
         self.position = Vec3::new(x, y, z);
     }
 
-    pub fn get(&self) -> Vec3 {
+    pub fn get_pos(&self) -> Vec3 {
         self.position
     }
 
@@ -135,13 +135,13 @@ impl Object {
     }
 
     pub fn with_transform(mut self, x: f32, y: f32, z: f32) -> Self {
-        self.transform.set(x, y, z);
+        self.transform.set_pos(x, y, z);
         self
     }
 
     pub fn look_at_obj(&mut self, other: &Object) {
-        let from = self.transform.get();
-        let target = other.transform.get();
+        let from = self.transform.get_pos();
+        let target = other.transform.get_pos();
         let dir = (target - from).normalize_or_zero();
         if dir.length_squared() > f32::EPSILON {
             self.rotate.quat = Quat::from_rotation_arc(Vec3::Z, dir);
@@ -149,7 +149,7 @@ impl Object {
     }
 
     pub fn look_at_vec(&mut self, target: Vec3) {
-        let from = self.transform.get();
+        let from = self.transform.get_pos();
         let dir = (target - from).normalize_or_zero();
         if dir.length_squared() > f32::EPSILON {
             self.rotate.quat = Quat::from_rotation_arc(Vec3::Z, dir);
@@ -168,7 +168,7 @@ pub trait Component {
 
 impl Component for Transform {
     fn apply(self, obj: &mut Object) {
-        obj.transform.set(self.x, self.y, self.z);
+        obj.transform.set_pos(self.x, self.y, self.z);
     }
 }
 

@@ -15,6 +15,7 @@ layout(location = 0) out vec4 out_color;
 layout(set = 0, binding = 0) uniform SceneUBO {
     mat4 view_proj;
     vec4 camera_pos;
+    vec4 camera_dir;
 };
 
 struct DirLightGPU {
@@ -41,10 +42,20 @@ layout(set = 0, binding = 1) uniform LightsUBO {
     vec4           ambient_color;
 };
 
-layout(set = 0, binding = 2) uniform texture2D albedo_img;
-layout(set = 0, binding = 3) uniform texture2D mr_img;
-layout(set = 0, binding = 4) uniform texture2D normal_img;
-layout(set = 0, binding = 5) uniform sampler tex_sampler;
+layout(set = 0, binding = 2) uniform ShadowUBO {
+    mat4 dir_light_vp_0;
+    mat4 dir_light_vp_1;
+    mat4 dir_light_vp_2;
+    vec4 cascade_splits;
+};
+
+layout(set = 0, binding = 3) uniform texture2DArray csm_shadow_map;
+layout(set = 0, binding = 4) uniform sampler shadow_sampler;
+
+layout(set = 0, binding = 5) uniform texture2D albedo_img;
+layout(set = 0, binding = 6) uniform texture2D mr_img;
+layout(set = 0, binding = 7) uniform texture2D normal_img;
+layout(set = 0, binding = 8) uniform sampler tex_sampler;
 
 layout(push_constant) uniform Push {
     mat4 model;
@@ -107,6 +118,64 @@ mat3 cotangent_frame(vec3 N, vec3 pos, vec2 uv) {
     return mat3(T * invmax, B * invmax, N);
 }
 
+float linstep(float lo, float hi, float v) {
+    return clamp((v - lo) / (hi - lo), 0.0, 1.0);
+}
+
+float vsm_factor(vec2 moments, float compare) {
+    if (compare <= moments.x) return 1.0;
+    float variance = max(moments.y - moments.x * moments.x, 0.001);
+    float d = compare - moments.x;
+    float p_max = variance / (variance + d * d);
+    return linstep(0.05, 1.0, p_max);
+}
+
+const float CSM_TEXEL = 1.0 / 2048.0;
+
+float sample_cascade(vec3 world_pos, int cascade) {
+    mat4 vp = cascade == 0 ? dir_light_vp_0 : (cascade == 1 ? dir_light_vp_1 : dir_light_vp_2);
+    vec4 light_clip = vp * vec4(world_pos, 1.0);
+    vec3 ndc = light_clip.xyz / light_clip.w;
+    vec2 uv = ndc.xy * 0.5 + 0.5;
+    if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) return 1.0;
+    float layer = float(cascade);
+    vec2 moments = vec2(0.0);
+    moments += texture(sampler2DArray(csm_shadow_map, shadow_sampler), vec3(uv + vec2(-1, -1) * CSM_TEXEL, layer)).rg;
+    moments += texture(sampler2DArray(csm_shadow_map, shadow_sampler), vec3(uv + vec2( 0, -1) * CSM_TEXEL, layer)).rg;
+    moments += texture(sampler2DArray(csm_shadow_map, shadow_sampler), vec3(uv + vec2( 1, -1) * CSM_TEXEL, layer)).rg;
+    moments += texture(sampler2DArray(csm_shadow_map, shadow_sampler), vec3(uv + vec2(-1,  0) * CSM_TEXEL, layer)).rg;
+    moments += texture(sampler2DArray(csm_shadow_map, shadow_sampler), vec3(uv                            , layer)).rg;
+    moments += texture(sampler2DArray(csm_shadow_map, shadow_sampler), vec3(uv + vec2( 1,  0) * CSM_TEXEL, layer)).rg;
+    moments += texture(sampler2DArray(csm_shadow_map, shadow_sampler), vec3(uv + vec2(-1,  1) * CSM_TEXEL, layer)).rg;
+    moments += texture(sampler2DArray(csm_shadow_map, shadow_sampler), vec3(uv + vec2( 0,  1) * CSM_TEXEL, layer)).rg;
+    moments += texture(sampler2DArray(csm_shadow_map, shadow_sampler), vec3(uv + vec2( 1,  1) * CSM_TEXEL, layer)).rg;
+    moments /= 9.0;
+    return vsm_factor(moments, ndc.z);
+}
+
+float csm_shadow(vec3 world_pos) {
+    float dist   = length(world_pos);
+
+    float split0 = cascade_splits.x;
+    float split1 = cascade_splits.y;
+    float blend0 = split0 * 0.15;
+    float blend1 = (split1 - split0) * 0.15;
+
+    if (dist < split0 - blend0) {
+        return sample_cascade(world_pos, 0);
+    } else if (dist < split0) {
+        float t = (dist - (split0 - blend0)) / blend0;
+        return mix(sample_cascade(world_pos, 0), sample_cascade(world_pos, 1), t);
+    } else if (dist < split1 - blend1) {
+        return sample_cascade(world_pos, 1);
+    } else if (dist < split1) {
+        float t = (dist - (split1 - blend1)) / blend1;
+        return mix(sample_cascade(world_pos, 1), sample_cascade(world_pos, 2), t);
+    } else {
+        return sample_cascade(world_pos, 2);
+    }
+}
+
 void main() {
     vec4 albedo_sample = texture(sampler2D(albedo_img, tex_sampler), frag_uv);
     vec3 albedo_c = albedo.rgb * albedo_sample.rgb;
@@ -126,9 +195,10 @@ void main() {
     vec3 Lo = vec3(0.0);
 
     for (int i = 0; i < counts.x; i++) {
-        vec3 L        = normalize(directional[i].direction.xyz);
+        vec3 L        = normalize(-directional[i].direction.xyz);
         vec3 radiance = directional[i].color_intensity.rgb * directional[i].color_intensity.a;
-        Lo += pbr_light(L, radiance, N, V, F0, albedo_c, metallic, roughness);
+        float shadow  = (i == 0) ? csm_shadow(frag_world_pos) : 1.0;
+        Lo += shadow * pbr_light(L, radiance, N, V, F0, albedo_c, metallic, roughness);
     }
 
     for (int i = 0; i < counts.y; i++) {
