@@ -118,39 +118,29 @@ mat3 cotangent_frame(vec3 N, vec3 pos, vec2 uv) {
     return mat3(T * invmax, B * invmax, N);
 }
 
-float linstep(float lo, float hi, float v) {
-    return clamp((v - lo) / (hi - lo), 0.0, 1.0);
-}
-
-float vsm_factor(vec2 moments, float compare) {
-    if (compare <= moments.x) return 1.0;
-    float variance = max(moments.y - moments.x * moments.x, 0.001);
-    float d = compare - moments.x;
-    float p_max = variance / (variance + d * d);
-    return linstep(0.05, 1.0, p_max);
-}
-
-const float CSM_TEXEL = 1.0 / 2048.0;
+const float CSM_TEXEL  = 1.0 / 2048.0;
+const float SHADOW_BIAS = 0.001;
 
 float sample_cascade(vec3 world_pos, int cascade) {
     mat4 vp = cascade == 0 ? dir_light_vp_0 : (cascade == 1 ? dir_light_vp_1 : dir_light_vp_2);
     vec4 light_clip = vp * vec4(world_pos, 1.0);
     vec3 ndc = light_clip.xyz / light_clip.w;
+    if (ndc.z < 0.0 || ndc.z > 1.0) return 1.0;
     vec2 uv = ndc.xy * 0.5 + 0.5;
     if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) return 1.0;
-    float layer = float(cascade);
-    vec2 moments = vec2(0.0);
-    moments += texture(sampler2DArray(csm_shadow_map, shadow_sampler), vec3(uv + vec2(-1, -1) * CSM_TEXEL, layer)).rg;
-    moments += texture(sampler2DArray(csm_shadow_map, shadow_sampler), vec3(uv + vec2( 0, -1) * CSM_TEXEL, layer)).rg;
-    moments += texture(sampler2DArray(csm_shadow_map, shadow_sampler), vec3(uv + vec2( 1, -1) * CSM_TEXEL, layer)).rg;
-    moments += texture(sampler2DArray(csm_shadow_map, shadow_sampler), vec3(uv + vec2(-1,  0) * CSM_TEXEL, layer)).rg;
-    moments += texture(sampler2DArray(csm_shadow_map, shadow_sampler), vec3(uv                            , layer)).rg;
-    moments += texture(sampler2DArray(csm_shadow_map, shadow_sampler), vec3(uv + vec2( 1,  0) * CSM_TEXEL, layer)).rg;
-    moments += texture(sampler2DArray(csm_shadow_map, shadow_sampler), vec3(uv + vec2(-1,  1) * CSM_TEXEL, layer)).rg;
-    moments += texture(sampler2DArray(csm_shadow_map, shadow_sampler), vec3(uv + vec2( 0,  1) * CSM_TEXEL, layer)).rg;
-    moments += texture(sampler2DArray(csm_shadow_map, shadow_sampler), vec3(uv + vec2( 1,  1) * CSM_TEXEL, layer)).rg;
-    moments /= 9.0;
-    return vsm_factor(moments, ndc.z);
+    float layer   = float(cascade);
+    float compare = ndc.z - SHADOW_BIAS;
+    float lit = 0.0;
+    lit += step(compare, texture(sampler2DArray(csm_shadow_map, shadow_sampler), vec3(uv + vec2(-1,-1)*CSM_TEXEL, layer)).r);
+    lit += step(compare, texture(sampler2DArray(csm_shadow_map, shadow_sampler), vec3(uv + vec2( 0,-1)*CSM_TEXEL, layer)).r);
+    lit += step(compare, texture(sampler2DArray(csm_shadow_map, shadow_sampler), vec3(uv + vec2( 1,-1)*CSM_TEXEL, layer)).r);
+    lit += step(compare, texture(sampler2DArray(csm_shadow_map, shadow_sampler), vec3(uv + vec2(-1, 0)*CSM_TEXEL, layer)).r);
+    lit += step(compare, texture(sampler2DArray(csm_shadow_map, shadow_sampler), vec3(uv                         , layer)).r);
+    lit += step(compare, texture(sampler2DArray(csm_shadow_map, shadow_sampler), vec3(uv + vec2( 1, 0)*CSM_TEXEL, layer)).r);
+    lit += step(compare, texture(sampler2DArray(csm_shadow_map, shadow_sampler), vec3(uv + vec2(-1, 1)*CSM_TEXEL, layer)).r);
+    lit += step(compare, texture(sampler2DArray(csm_shadow_map, shadow_sampler), vec3(uv + vec2( 0, 1)*CSM_TEXEL, layer)).r);
+    lit += step(compare, texture(sampler2DArray(csm_shadow_map, shadow_sampler), vec3(uv + vec2( 1, 1)*CSM_TEXEL, layer)).r);
+    return lit / 9.0;
 }
 
 float csm_shadow(vec3 world_pos) {

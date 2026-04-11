@@ -274,8 +274,8 @@ impl Renderer {
 
         let csm_sampler = {
             let info = vk::SamplerCreateInfo::default()
-                .mag_filter(vk::Filter::LINEAR)
-                .min_filter(vk::Filter::LINEAR)
+                .mag_filter(vk::Filter::NEAREST)
+                .min_filter(vk::Filter::NEAREST)
                 .mipmap_mode(vk::SamplerMipmapMode::NEAREST)
                 .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_BORDER)
                 .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_BORDER)
@@ -1398,48 +1398,47 @@ impl Renderer {
         device:          &Device,
         command_pool:    vk::CommandPool,
         graphics_queue:  vk::Queue,
-    ) -> (
-        vk::Image, vk::DeviceMemory, vk::ImageView, Vec<vk::ImageView>,
-        vk::Image, vk::DeviceMemory, vk::ImageView,
-    ) {
-        let shadow_image_info = vk::ImageCreateInfo::default()
+    ) -> (vk::Image, vk::DeviceMemory, vk::ImageView, Vec<vk::ImageView>) {
+        let image_info = vk::ImageCreateInfo::default()
             .image_type(vk::ImageType::TYPE_2D)
-            .format(vk::Format::R32G32_SFLOAT)
+            .format(vk::Format::D32_SFLOAT)
             .extent(vk::Extent3D { width: CSM_SIZE, height: CSM_SIZE, depth: 1 })
             .mip_levels(1)
             .array_layers(CSM_CASCADES)
             .samples(vk::SampleCountFlags::TYPE_1)
             .tiling(vk::ImageTiling::OPTIMAL)
-            .usage(vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED)
+            .usage(vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::SAMPLED)
             .initial_layout(vk::ImageLayout::UNDEFINED);
-        let shadow_image = unsafe { device.create_image(&shadow_image_info, None).unwrap() };
-        let shadow_mem_reqs = unsafe { device.get_image_memory_requirements(shadow_image) };
-        let shadow_mem_type = Self::find_memory_type(
-            instance, physical_device, shadow_mem_reqs.memory_type_bits,
+        let image = unsafe { device.create_image(&image_info, None).unwrap() };
+        let mem_reqs = unsafe { device.get_image_memory_requirements(image) };
+        let mem_type = Self::find_memory_type(
+            instance, physical_device, mem_reqs.memory_type_bits,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         );
-        let shadow_memory = unsafe {
+        let memory = unsafe {
             let alloc = vk::MemoryAllocateInfo::default()
-                .allocation_size(shadow_mem_reqs.size)
-                .memory_type_index(shadow_mem_type);
+                .allocation_size(mem_reqs.size)
+                .memory_type_index(mem_type);
             let m = device.allocate_memory(&alloc, None).unwrap();
-            device.bind_image_memory(shadow_image, m, 0).unwrap();
+            device.bind_image_memory(image, m, 0).unwrap();
             m
         };
 
-        let shadow_view = unsafe {
+        let depth_range = vk::ImageSubresourceRange {
+            aspect_mask:      vk::ImageAspectFlags::DEPTH,
+            base_mip_level:   0,
+            level_count:      1,
+            base_array_layer: 0,
+            layer_count:      CSM_CASCADES,
+        };
+
+        let array_view = unsafe {
             device.create_image_view(
                 &vk::ImageViewCreateInfo::default()
-                    .image(shadow_image)
+                    .image(image)
                     .view_type(vk::ImageViewType::TYPE_2D_ARRAY)
-                    .format(vk::Format::R32G32_SFLOAT)
-                    .subresource_range(vk::ImageSubresourceRange {
-                        aspect_mask:      vk::ImageAspectFlags::COLOR,
-                        base_mip_level:   0,
-                        level_count:      1,
-                        base_array_layer: 0,
-                        layer_count:      CSM_CASCADES,
-                    }),
+                    .format(vk::Format::D32_SFLOAT)
+                    .subresource_range(depth_range),
                 None,
             ).unwrap()
         };
@@ -1447,11 +1446,11 @@ impl Renderer {
         let layer_views: Vec<vk::ImageView> = (0..CSM_CASCADES).map(|i| unsafe {
             device.create_image_view(
                 &vk::ImageViewCreateInfo::default()
-                    .image(shadow_image)
+                    .image(image)
                     .view_type(vk::ImageViewType::TYPE_2D)
-                    .format(vk::Format::R32G32_SFLOAT)
+                    .format(vk::Format::D32_SFLOAT)
                     .subresource_range(vk::ImageSubresourceRange {
-                        aspect_mask:      vk::ImageAspectFlags::COLOR,
+                        aspect_mask:      vk::ImageAspectFlags::DEPTH,
                         base_mip_level:   0,
                         level_count:      1,
                         base_array_layer: i,
@@ -1461,47 +1460,6 @@ impl Renderer {
             ).unwrap()
         }).collect();
 
-        let depth_image_info = vk::ImageCreateInfo::default()
-            .image_type(vk::ImageType::TYPE_2D)
-            .format(vk::Format::D32_SFLOAT)
-            .extent(vk::Extent3D { width: CSM_SIZE, height: CSM_SIZE, depth: 1 })
-            .mip_levels(1)
-            .array_layers(1)
-            .samples(vk::SampleCountFlags::TYPE_1)
-            .tiling(vk::ImageTiling::OPTIMAL)
-            .usage(vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT)
-            .initial_layout(vk::ImageLayout::UNDEFINED);
-        let depth_image = unsafe { device.create_image(&depth_image_info, None).unwrap() };
-        let depth_mem_reqs = unsafe { device.get_image_memory_requirements(depth_image) };
-        let depth_mem_type = Self::find_memory_type(
-            instance, physical_device, depth_mem_reqs.memory_type_bits,
-            vk::MemoryPropertyFlags::DEVICE_LOCAL,
-        );
-        let depth_memory = unsafe {
-            let alloc = vk::MemoryAllocateInfo::default()
-                .allocation_size(depth_mem_reqs.size)
-                .memory_type_index(depth_mem_type);
-            let m = device.allocate_memory(&alloc, None).unwrap();
-            device.bind_image_memory(depth_image, m, 0).unwrap();
-            m
-        };
-        let depth_view = unsafe {
-            device.create_image_view(
-                &vk::ImageViewCreateInfo::default()
-                    .image(depth_image)
-                    .view_type(vk::ImageViewType::TYPE_2D)
-                    .format(vk::Format::D32_SFLOAT)
-                    .subresource_range(vk::ImageSubresourceRange {
-                        aspect_mask:      vk::ImageAspectFlags::DEPTH,
-                        base_mip_level:   0,
-                        level_count:      1,
-                        base_array_layer: 0,
-                        layer_count:      1,
-                    }),
-                None,
-            ).unwrap()
-        };
-
         unsafe {
             let cmd_info = vk::CommandBufferAllocateInfo::default()
                 .command_pool(command_pool)
@@ -1510,19 +1468,13 @@ impl Renderer {
             let cmd = device.allocate_command_buffers(&cmd_info).unwrap()[0];
             device.begin_command_buffer(cmd, &vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)).unwrap();
 
-            let shadow_barrier = vk::ImageMemoryBarrier::default()
+            let barrier = vk::ImageMemoryBarrier::default()
                 .old_layout(vk::ImageLayout::UNDEFINED)
                 .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                 .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                 .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .image(shadow_image)
-                .subresource_range(vk::ImageSubresourceRange {
-                    aspect_mask:      vk::ImageAspectFlags::COLOR,
-                    base_mip_level:   0,
-                    level_count:      1,
-                    base_array_layer: 0,
-                    layer_count:      CSM_CASCADES,
-                })
+                .image(image)
+                .subresource_range(depth_range)
                 .src_access_mask(vk::AccessFlags::empty())
                 .dst_access_mask(vk::AccessFlags::SHADER_READ);
 
@@ -1531,7 +1483,7 @@ impl Renderer {
                 vk::PipelineStageFlags::TOP_OF_PIPE,
                 vk::PipelineStageFlags::FRAGMENT_SHADER,
                 vk::DependencyFlags::empty(),
-                &[], &[], &[shadow_barrier],
+                &[], &[], &[barrier],
             );
 
             device.end_command_buffer(cmd).unwrap();
@@ -1542,13 +1494,13 @@ impl Renderer {
             device.free_command_buffers(command_pool, &cmds);
         }
 
-        (shadow_image, shadow_memory, shadow_view, layer_views, depth_image, depth_memory, depth_view)
+        (image, memory, array_view, layer_views)
     }
 
     fn create_csm_render_pass(device: &Device) -> vk::RenderPass {
         let attachments = [
             vk::AttachmentDescription::default()
-                .format(vk::Format::R32G32_SFLOAT)
+                .format(vk::Format::R32_SFLOAT)
                 .samples(vk::SampleCountFlags::TYPE_1)
                 .load_op(vk::AttachmentLoadOp::CLEAR)
                 .store_op(vk::AttachmentStoreOp::STORE)
@@ -1672,9 +1624,7 @@ impl Renderer {
             .cull_mode(vk::CullModeFlags::NONE)
             .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
             .depth_clamp_enable(true)
-            .depth_bias_enable(true)
-            .depth_bias_constant_factor(2.0)
-            .depth_bias_slope_factor(2.0)
+            .depth_bias_enable(false)
             .line_width(1.0);
 
         let multisampling = vk::PipelineMultisampleStateCreateInfo::default()
@@ -1863,7 +1813,6 @@ impl Renderer {
     ) -> ShadowUBO {
         let mut light_dir = Vec3::new(0.0, -1.0, 0.0);
         let mut has_dir_light = false;
-
         for obj in world.objects() {
             if let Some(brv_engine::Light::Directional(_)) = &obj.light {
                 let dir = obj.rotate.quat() * Vec3::Z;
